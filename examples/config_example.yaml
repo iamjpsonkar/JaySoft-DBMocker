@@ -1,0 +1,551 @@
+# JaySoft:DBMocker Configuration Example
+# This file demonstrates all available configuration options
+
+# Global generation settings
+generation:
+  # Batch size for bulk inserts (higher = faster, more memory)
+  batch_size: 1000
+  
+  # Number of worker threads for parallel processing
+  max_workers: 4
+  
+  # Random seed for reproducible data generation
+  seed: 42
+  
+  # Whether to truncate existing data before inserting new data
+  truncate_existing: false
+  
+  # Whether to preserve existing data for FK references
+  preserve_existing_data: true
+  
+  # Probability of reusing existing values for FK relationships (0.0 - 1.0)
+  reuse_existing_values: 0.3
+
+# Table-specific configuration
+tables:
+  # Users table configuration
+  users:
+    # Number of rows to generate for this table
+    rows_to_generate: 10000
+    
+    # Column-specific configuration
+    column_configs:
+      # Email column - use email generator, never null
+      email:
+        generator_function: 'email'
+        null_probability: 0.0
+      
+      # Name columns - use name generator with small null chance
+      first_name:
+        generator_function: 'name'
+        null_probability: 0.02
+      
+      last_name:
+        generator_function: 'name'
+        null_probability: 0.02
+      
+      # Username - custom pattern
+      username:
+        generator_function: 'username'
+        null_probability: 0.0
+        min_length: 3
+        max_length: 20
+      
+      # Age - specific range with null probability
+      age:
+        min_value: 18
+        max_value: 80
+        null_probability: 0.1
+      
+      # Gender - weighted values
+      gender:
+        weighted_values:
+          male: 0.45
+          female: 0.45
+          other: 0.10
+      
+      # Country - limited set of values
+      country:
+        possible_values: 
+          - "United States"
+          - "Canada" 
+          - "United Kingdom"
+          - "Germany"
+          - "France"
+          - "Spain"
+          - "Italy"
+          - "Australia"
+          - "Japan"
+          - "Brazil"
+        null_probability: 0.05
+      
+      # Phone number with pattern
+      phone:
+        generator_function: 'phone'
+        null_probability: 0.15
+      
+      # Address fields
+      address:
+        generator_function: 'address'
+        null_probability: 0.1
+      
+      city:
+        generator_function: 'city'
+        null_probability: 0.05
+      
+      postal_code:
+        generator_function: 'zipcode'
+        null_probability: 0.05
+      
+      # Boolean with weighted probability
+      is_active:
+        weighted_values:
+          true: 0.9
+          false: 0.1
+
+  # Categories table
+  categories:
+    rows_to_generate: 50
+    column_configs:
+      name:
+        possible_values:
+          - "Electronics"
+          - "Computers & Tablets"
+          - "Smartphones & Accessories"
+          - "Clothing & Fashion"
+          - "Shoes & Footwear"
+          - "Books & Media"
+          - "Home & Garden"
+          - "Kitchen & Dining"
+          - "Sports & Outdoors"
+          - "Health & Beauty"
+          - "Baby & Kids"
+          - "Automotive"
+          - "Tools & Hardware"
+          - "Office & Business"
+          - "Pet Supplies"
+          - "Toys & Games"
+          - "Art & Crafts"
+          - "Musical Instruments"
+          - "Travel & Luggage"
+          - "Jewelry & Watches"
+      
+      description:
+        generator_function: 'lorem'
+        max_length: 500
+        null_probability: 0.2
+
+  # Products table
+  products:
+    rows_to_generate: 5000
+    column_configs:
+      # SKU with pattern
+      sku:
+        pattern: '[A-Z]{3}-[0-9]{6}'
+        null_probability: 0.0
+      
+      # Product name
+      name:
+        generator_function: 'lorem'
+        min_length: 10
+        max_length: 100
+        null_probability: 0.0
+      
+      # Description
+      description:
+        generator_function: 'lorem'
+        min_length: 50
+        max_length: 1000
+        null_probability: 0.1
+      
+      # Pricing
+      price:
+        min_value: 9.99
+        max_value: 2999.99
+        null_probability: 0.0
+      
+      cost:
+        min_value: 5.0
+        max_value: 1500.0
+        null_probability: 0.05
+      
+      # Weight in kg
+      weight:
+        min_value: 0.01
+        max_value: 50.0
+        null_probability: 0.1
+      
+      # Stock quantity
+      stock_quantity:
+        min_value: 0
+        max_value: 1000
+        null_probability: 0.0
+      
+      # Reorder level
+      reorder_level:
+        min_value: 0
+        max_value: 100
+        null_probability: 0.0
+      
+      # Status with weights
+      status:
+        weighted_values:
+          active: 0.85
+          inactive: 0.10
+          discontinued: 0.05
+      
+      # Brand names
+      brand:
+        possible_values:
+          - "Samsung"
+          - "Apple"
+          - "Sony"
+          - "LG"
+          - "Dell"
+          - "HP"
+          - "Lenovo"
+          - "Microsoft"
+          - "Google"
+          - "Amazon"
+          - "Nike"
+          - "Adidas"
+          - "Generic"
+        null_probability: 0.1
+      
+      # Colors
+      color:
+        possible_values:
+          - "Black"
+          - "White"
+          - "Silver"
+          - "Blue"
+          - "Red"
+          - "Green"
+          - "Yellow"
+          - "Purple"
+          - "Orange"
+          - "Gray"
+          - "Multi-color"
+        null_probability: 0.2
+      
+      # Rating
+      rating:
+        min_value: 1.0
+        max_value: 5.0
+        null_probability: 0.3
+      
+      # Review count
+      review_count:
+        min_value: 0
+        max_value: 10000
+        null_probability: 0.0
+
+  # Orders table
+  orders:
+    rows_to_generate: 20000
+    column_configs:
+      # Order number pattern
+      order_number:
+        pattern: 'ORD-[0-9]{4}-[0-9]{6}'
+        null_probability: 0.0
+      
+      # Order status
+      status:
+        weighted_values:
+          pending: 0.05
+          confirmed: 0.10
+          processing: 0.15
+          shipped: 0.25
+          delivered: 0.40
+          cancelled: 0.03
+          returned: 0.02
+      
+      # Payment method
+      payment_method:
+        weighted_values:
+          credit_card: 0.60
+          debit_card: 0.20
+          paypal: 0.15
+          bank_transfer: 0.03
+          cash_on_delivery: 0.02
+      
+      # Payment status
+      payment_status:
+        weighted_values:
+          paid: 0.85
+          pending: 0.10
+          failed: 0.03
+          refunded: 0.02
+      
+      # Financial amounts
+      subtotal:
+        min_value: 10.0
+        max_value: 5000.0
+        null_probability: 0.0
+      
+      tax_amount:
+        min_value: 0.0
+        max_value: 500.0
+        null_probability: 0.0
+      
+      shipping_cost:
+        min_value: 0.0
+        max_value: 50.0
+        null_probability: 0.0
+      
+      discount_amount:
+        min_value: 0.0
+        max_value: 200.0
+        null_probability: 0.7  # Most orders don't have discounts
+      
+      total_amount:
+        min_value: 10.0
+        max_value: 5500.0
+        null_probability: 0.0
+      
+      # Currency
+      currency:
+        weighted_values:
+          USD: 0.70
+          EUR: 0.15
+          GBP: 0.08
+          CAD: 0.04
+          AUD: 0.03
+      
+      # Addresses
+      shipping_address:
+        generator_function: 'address'
+        null_probability: 0.05
+      
+      billing_address:
+        generator_function: 'address'
+        null_probability: 0.1
+      
+      # Tracking number
+      tracking_number:
+        pattern: '[A-Z]{2}[0-9]{12}[A-Z]{2}'
+        null_probability: 0.4  # Not all orders have tracking yet
+
+  # Order items table
+  order_items:
+    rows_to_generate: 50000
+    column_configs:
+      # Quantity
+      quantity:
+        min_value: 1
+        max_value: 10
+        null_probability: 0.0
+      
+      # Unit price
+      unit_price:
+        min_value: 1.0
+        max_value: 2999.99
+        null_probability: 0.0
+      
+      # Discount percentage
+      discount_percent:
+        min_value: 0.0
+        max_value: 50.0
+        null_probability: 0.8  # Most items don't have discounts
+      
+      # Discount amount
+      discount_amount:
+        min_value: 0.0
+        max_value: 100.0
+        null_probability: 0.8
+      
+      # Total price
+      total_price:
+        min_value: 1.0
+        max_value: 10000.0
+        null_probability: 0.0
+
+  # Reviews table
+  reviews:
+    rows_to_generate: 15000
+    column_configs:
+      # Rating
+      rating:
+        weighted_values:
+          1: 0.05
+          2: 0.05
+          3: 0.15
+          4: 0.35
+          5: 0.40
+      
+      # Review title
+      title:
+        generator_function: 'lorem'
+        min_length: 10
+        max_length: 100
+        null_probability: 0.2
+      
+      # Review comment
+      comment:
+        generator_function: 'lorem'
+        min_length: 50
+        max_length: 1000
+        null_probability: 0.1
+      
+      # Verification status
+      is_verified:
+        weighted_values:
+          true: 0.7
+          false: 0.3
+      
+      # Helpful count
+      helpful_count:
+        min_value: 0
+        max_value: 500
+        null_probability: 0.0
+      
+      # Total votes
+      total_votes:
+        min_value: 0
+        max_value: 600
+        null_probability: 0.0
+      
+      # Review status
+      status:
+        weighted_values:
+          published: 0.90
+          pending: 0.05
+          hidden: 0.03
+          spam: 0.02
+
+  # Shopping cart table
+  shopping_cart:
+    rows_to_generate: 5000
+    column_configs:
+      quantity:
+        min_value: 1
+        max_value: 20
+        null_probability: 0.0
+
+  # Wishlists table
+  wishlists:
+    rows_to_generate: 3000
+    column_configs:
+      name:
+        possible_values:
+          - "My Wishlist"
+          - "Birthday Wishlist"
+          - "Christmas List"
+          - "Gift Ideas"
+          - "Future Purchases"
+          - "Electronics Wishlist"
+          - "Books to Read"
+          - "Fashion Items"
+        null_probability: 0.1
+      
+      description:
+        generator_function: 'lorem'
+        max_length: 500
+        null_probability: 0.6
+      
+      is_public:
+        weighted_values:
+          true: 0.3
+          false: 0.7
+
+  # Wishlist items table
+  wishlist_items:
+    rows_to_generate: 12000
+    column_configs:
+      notes:
+        generator_function: 'lorem'
+        max_length: 200
+        null_probability: 0.8
+      
+      priority:
+        weighted_values:
+          0: 0.4   # Low priority
+          1: 0.3   # Medium-low
+          2: 0.15  # Medium
+          3: 0.1   # Medium-high
+          4: 0.04  # High
+          5: 0.01  # Very high
+
+  # Coupons table
+  coupons:
+    rows_to_generate: 100
+    column_configs:
+      # Coupon code pattern
+      code:
+        pattern: '[A-Z]{4,8}[0-9]{0,4}'
+        null_probability: 0.0
+      
+      # Coupon name
+      name:
+        possible_values:
+          - "Welcome Discount"
+          - "Summer Sale"
+          - "Black Friday"
+          - "Cyber Monday"
+          - "Back to School"
+          - "Holiday Special"
+          - "Clearance Sale"
+          - "VIP Discount"
+          - "Free Shipping"
+          - "Buy One Get One"
+        null_probability: 0.0
+      
+      # Discount type
+      discount_type:
+        weighted_values:
+          percentage: 0.6
+          fixed_amount: 0.3
+          free_shipping: 0.1
+      
+      # Discount value
+      discount_value:
+        min_value: 5.0
+        max_value: 100.0
+        null_probability: 0.0
+      
+      # Minimum order amount
+      minimum_order_amount:
+        min_value: 0.0
+        max_value: 500.0
+        null_probability: 0.3
+      
+      # Usage limit
+      usage_limit:
+        min_value: 10
+        max_value: 10000
+        null_probability: 0.2
+      
+      # User limit
+      user_limit:
+        weighted_values:
+          1: 0.7    # One use per user
+          2: 0.15   # Two uses per user
+          3: 0.1    # Three uses per user
+          5: 0.05   # Five uses per user
+      
+      # Active status
+      is_active:
+        weighted_values:
+          true: 0.8
+          false: 0.2
+
+# Advanced options (optional)
+advanced:
+  # Custom connection arguments for specific database drivers
+  connection_args:
+    postgresql:
+      sslmode: "prefer"
+    mysql:
+      charset: "utf8mb4"
+      ssl_mode: "PREFERRED"
+  
+  # Performance tuning
+  performance:
+    # Use bulk insert optimizations
+    use_bulk_insert: true
+    
+    # Disable foreign key checks during insert (be careful!)
+    disable_fk_checks: false
+    
+    # Commit frequency (commits every N batches)
+    commit_frequency: 10
