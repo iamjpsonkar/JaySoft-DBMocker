@@ -255,6 +255,10 @@ class DBMockerGUI:
         current_tab = self.notebook.index(self.notebook.select())
         total_tabs = self.notebook.index("end")
         
+        # Validate current tab before moving to next
+        if not self.validate_current_tab():
+            return
+        
         if current_tab < total_tabs - 1:
             self.notebook.select(current_tab + 1)
         self.update_navigation_buttons()
@@ -804,15 +808,15 @@ class DBMockerGUI:
         # Clear existing items
         self.config_tree.delete(*self.config_tree.get_children())
         
-        # Add tables with default configuration (selected by default for better UX)
+        # Add tables with default configuration (deselected by default)
         for table in schema.tables:
             self.config_tree.insert("", tk.END, values=(
-                "☑️",  # Selected by default for better user experience
+                "☐",  # Deselected by default - user must choose
                 table.name,
                 "Generate New",  # Default mode
                 "Generate New",  # Default duplicate mode
                 self.default_rows_var.get(),
-                "Ready"  # Ready since selected by default
+                "Not Selected"  # Clear status for unselected tables
             ))
         
         # Update selection info
@@ -820,6 +824,10 @@ class DBMockerGUI:
     
     def apply_default_rows(self):
         """Apply default row count to selected tables only."""
+        # Validate that tables are selected first
+        if not self.validate_table_selection("apply default row count"):
+            return
+            
         default_rows = self.default_rows_var.get()
         selected_count = 0
         
@@ -834,13 +842,45 @@ class DBMockerGUI:
         # Update selection info after changes
         self.update_selection_info()
         
-        # Show feedback message
+        # Show success message
+        tk.messagebox.showinfo("Applied", 
+                             f"Applied {default_rows} rows to {selected_count} selected table(s).")
+    
+    def validate_table_selection(self, operation_name="perform this operation"):
+        """Validate that at least one table is selected for the operation."""
+        selected_count = 0
+        
+        for item in self.config_tree.get_children():
+            values = self.config_tree.item(item, "values")
+            if values[0] == "☑️":  # Check if table is selected
+                selected_count += 1
+        
         if selected_count == 0:
-            tk.messagebox.showinfo("No Selection", 
-                                 "No tables are selected. Please select tables first using the checkboxes.")
-        else:
-            tk.messagebox.showinfo("Applied", 
-                                 f"Applied {default_rows} rows to {selected_count} selected table(s).")
+            # Show error message with guidance
+            tk.messagebox.showerror(
+                "No Tables Selected", 
+                f"Please select at least one table before attempting to {operation_name}.\n\n"
+                f"How to select tables:\n"
+                f"• Click the checkbox (☐) next to table names to select them (☑️)\n"
+                f"• Use 'Select All for Generation' to select all tables for new data\n"
+                f"• Use 'Select All for Existing' to use existing data from all tables\n"
+                f"• Use 'Smart Selection' for intelligent table selection"
+            )
+            return False
+        
+        return True
+    
+    def validate_current_tab(self):
+        """Validate the current tab before allowing navigation."""
+        current_tab = self.notebook.index(self.notebook.select())
+        tab_text = self.notebook.tab(current_tab, "text")
+        
+        # Configuration tab (tab index 1) requires table selection
+        if "Configuration" in tab_text:
+            return self.validate_table_selection("navigate to the next tab")
+        
+        # For other tabs, no validation needed
+        return True
     
     def handle_tree_click(self, event):
         """Handle clicks on the tree for checkbox and mode toggles."""
@@ -858,10 +898,10 @@ class DBMockerGUI:
             # Toggle checkbox
             if current_selection == "☑️":
                 values[0] = "☐"  # Unchecked
-                values[4] = "Disabled"  # Update status
+                values[5] = "Not Selected"  # Update status (index 5)
             else:
                 values[0] = "☑️"  # Checked
-                values[4] = "Ready"  # Update status
+                values[5] = "Ready"  # Update status (index 5)
             
             self.config_tree.item(item, values=values)
             self.update_selection_info()
@@ -933,9 +973,10 @@ class DBMockerGUI:
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
             values[0] = "☐"  # Uncheck checkbox
-            values[2] = "Generate New"  # Mode
-            values[3] = "0"  # Rows
-            values[4] = "Disabled"  # Status
+            values[2] = "Generate New"  # Data Mode
+            values[3] = "Generate New"  # Duplicate Mode
+            values[4] = "0"  # Rows
+            values[5] = "Not Selected"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
@@ -1768,6 +1809,10 @@ Enterprise-grade mock data generation for professional development.'''
     
     def start_generation(self):
         """Start data generation process."""
+        # Validate table selection before starting generation
+        if not self.validate_table_selection("start data generation"):
+            return
+            
         def generation_task():
             try:
                 # Set random seed if enabled
