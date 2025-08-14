@@ -217,6 +217,10 @@ class DBMockerGUI:
         # Ctrl+Q to quit
         self.root.bind('<Control-q>', lambda e: self.close_application())
         
+        # Navigation shortcuts
+        self.root.bind('<Control-Left>', lambda e: self.previous_tab())
+        self.root.bind('<Control-Right>', lambda e: self.next_tab())
+        
         # Focus window (make sure it's in front)
         self.root.focus_force()
         self.root.lift()
@@ -243,6 +247,40 @@ class DBMockerGUI:
             self.root.state('normal')
             self._is_fullscreen = False
     
+    def next_tab(self):
+        """Navigate to the next tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        total_tabs = self.notebook.index("end")
+        
+        if current_tab < total_tabs - 1:
+            self.notebook.select(current_tab + 1)
+        self.update_navigation_buttons()
+    
+    def previous_tab(self):
+        """Navigate to the previous tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        
+        if current_tab > 0:
+            self.notebook.select(current_tab - 1)
+        self.update_navigation_buttons()
+    
+    def update_navigation_buttons(self):
+        """Update navigation button states based on current tab."""
+        current_tab = self.notebook.index(self.notebook.select())
+        total_tabs = self.notebook.index("end")
+        
+        # Enable/disable Previous button
+        if current_tab == 0:
+            self.prev_button.config(state=tk.DISABLED)
+        else:
+            self.prev_button.config(state=tk.NORMAL)
+        
+        # Enable/disable Next button
+        if current_tab == total_tabs - 1:
+            self.next_button.config(state=tk.DISABLED)
+        else:
+            self.next_button.config(state=tk.NORMAL)
+    
     def setup_gui(self):
         """Setup the GUI layout."""
         # FIRST: Create Done button at bottom to reserve space
@@ -255,6 +293,12 @@ class DBMockerGUI:
         
         self.notebook = ttk.Notebook(main_container)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Bind tab change event to update navigation buttons
+        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self.update_navigation_buttons())
+        
+        # Initialize navigation button states after all tabs are created
+        self.root.after(100, self.update_navigation_buttons)
         
         # Connection tab
         self.connection_frame = ttk.Frame(self.notebook)
@@ -1251,6 +1295,22 @@ class DBMockerGUI:
         separator = ttk.Separator(bottom_frame, orient='horizontal')
         separator.pack(fill=tk.X, pady=(0, 10))
         
+        # Navigation frame for tab controls
+        nav_frame = ttk.Frame(bottom_frame)
+        nav_frame.pack(side=tk.LEFT)
+        
+        # Previous button
+        self.prev_button = ttk.Button(nav_frame, text="⬅️ Previous", 
+                                     command=self.previous_tab)
+        self.prev_button.pack(side=tk.LEFT, padx=(0, 5))
+        ToolTip(self.prev_button, "Go to previous tab:\n• Navigate backward through workflow\n• Quick tab switching\n• Keyboard: Ctrl+Left")
+        
+        # Next button
+        self.next_button = ttk.Button(nav_frame, text="Next ➡️", 
+                                     command=self.next_tab)
+        self.next_button.pack(side=tk.LEFT, padx=(0, 10))
+        ToolTip(self.next_button, "Go to next tab:\n• Navigate forward through workflow\n• Quick tab switching\n• Keyboard: Ctrl+Right")
+        
         # Button frame for proper alignment
         button_frame = ttk.Frame(bottom_frame)
         button_frame.pack(side=tk.RIGHT)
@@ -1624,12 +1684,15 @@ Enterprise-grade mock data generation for professional development.'''
         if hasattr(self, 'config_tree'):
             for item in self.config_tree.get_children():
                 values = self.config_tree.item(item, "values")
-                table_name = values[0]
-                rows_to_generate = int(values[1])
+                selected = values[0] == "☑️"  # Check if selected
+                table_name = values[1]  # Table name at index 1
+                mode = values[2]  # Mode at index 2
+                rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
                 
-                if rows_to_generate > 0:
+                if selected and rows_to_generate > 0:
                     config.table_configs[table_name] = TableGenerationConfig(
-                        rows_to_generate=rows_to_generate
+                        rows_to_generate=rows_to_generate,
+                        use_existing_data=mode == "Use Existing"
                     )
         
         return config
