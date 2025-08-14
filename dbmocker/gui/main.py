@@ -460,17 +460,19 @@ class DBMockerGUI:
                  foreground="gray").pack(side=tk.LEFT)
         
         # Table configuration tree
-        config_columns = ("table", "mode", "rows", "status")
+        config_columns = ("selected", "table", "mode", "rows", "status")
         self.config_tree = ttk.Treeview(table_config_frame, columns=config_columns, show="headings", height=10)
         
+        self.config_tree.heading("selected", text="☑️ Select")
         self.config_tree.heading("table", text="Table Name")
         self.config_tree.heading("mode", text="Data Mode")
         self.config_tree.heading("rows", text="Rows to Generate")
         self.config_tree.heading("status", text="Status")
         
-        self.config_tree.column("table", width=180)
-        self.config_tree.column("mode", width=130)
-        self.config_tree.column("rows", width=120)
+        self.config_tree.column("selected", width=80, anchor=tk.CENTER)
+        self.config_tree.column("table", width=160)
+        self.config_tree.column("mode", width=120)
+        self.config_tree.column("rows", width=110)
         self.config_tree.column("status", width=100)
         
         config_scrollbar = ttk.Scrollbar(table_config_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
@@ -479,8 +481,9 @@ class DBMockerGUI:
         self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Bind double-click to toggle mode
+        # Bind clicks for interactions
         self.config_tree.bind("<Double-1>", self.toggle_table_mode)
+        self.config_tree.bind("<Button-1>", self.handle_tree_click)
     
     def setup_generation_tab(self):
         """Setup data generation tab."""
@@ -676,6 +679,7 @@ class DBMockerGUI:
         # Add tables with default configuration
         for table in schema.tables:
             self.config_tree.insert("", tk.END, values=(
+                "☑️",  # Selected by default
                 table.name,
                 "Generate New",  # Default mode
                 self.default_rows_var.get(),
@@ -690,8 +694,32 @@ class DBMockerGUI:
         default_rows = self.default_rows_var.get()
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[2] = default_rows  # Row count is now index 2 (table, mode, rows, status)
+            values[3] = default_rows  # Row count is now index 3 (selected, table, mode, rows, status)
             self.config_tree.item(item, values=values)
+    
+    def handle_tree_click(self, event):
+        """Handle clicks on the tree for checkbox and mode toggles."""
+        item = self.config_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        column = self.config_tree.identify_column(event.x)
+        
+        # Handle checkbox toggle (selected column)
+        if column == "#1":  # Selected column
+            values = list(self.config_tree.item(item, "values"))
+            current_selection = values[0]
+            
+            # Toggle checkbox
+            if current_selection == "☑️":
+                values[0] = "☐"  # Unchecked
+                values[4] = "Disabled"  # Update status
+            else:
+                values[0] = "☑️"  # Checked
+                values[4] = "Ready"  # Update status
+            
+            self.config_tree.item(item, values=values)
+            self.update_selection_info()
     
     def toggle_table_mode(self, event):
         """Toggle between 'Generate New' and 'Use Existing' for a table."""
@@ -701,28 +729,30 @@ class DBMockerGUI:
         
         # Check if click was on the mode column
         column = self.config_tree.identify_column(event.x)
-        if column == "#2":  # Mode column (0-indexed as #2)
+        if column == "#3":  # Mode column (now index 3: selected, table, mode, rows, status)
             values = list(self.config_tree.item(item, "values"))
-            current_mode = values[1]
+            current_mode = values[2]  # Mode is now at index 2
             
             # Toggle mode
             if current_mode == "Generate New":
-                values[1] = "Use Existing"
-                values[2] = "0"  # Set rows to 0 for existing data
+                values[2] = "Use Existing"
+                values[3] = "0"  # Set rows to 0 for existing data
             else:
-                values[1] = "Generate New"
-                values[2] = str(self.default_rows_var.get())  # Reset to default rows
+                values[2] = "Generate New"
+                values[3] = str(self.default_rows_var.get())  # Reset to default rows
             
             self.config_tree.item(item, values=values)
+            self.update_selection_info()
     
     def select_all_for_generation(self):
         """Set all tables to Generate New mode with default rows."""
         default_rows = self.default_rows_var.get()
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[1] = "Generate New"
-            values[2] = default_rows
-            values[3] = "Ready"
+            values[0] = "☑️"  # Select checkbox
+            values[2] = "Generate New"  # Mode
+            values[3] = default_rows  # Rows
+            values[4] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
@@ -730,19 +760,21 @@ class DBMockerGUI:
         """Set all tables to Use Existing mode."""
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[1] = "Use Existing"
-            values[2] = "0"
-            values[3] = "Ready"
+            values[0] = "☑️"  # Select checkbox
+            values[2] = "Use Existing"  # Mode
+            values[3] = "0"  # Rows
+            values[4] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
     def clear_all_selections(self):
-        """Set all tables to Generate New mode with 0 rows (effectively no generation)."""
+        """Clear all table selections (uncheck all)."""
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[1] = "Generate New"
-            values[2] = "0"
-            values[3] = "Ready"
+            values[0] = "☐"  # Uncheck checkbox
+            values[2] = "Generate New"  # Mode
+            values[3] = "0"  # Rows
+            values[4] = "Disabled"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
@@ -757,7 +789,7 @@ class DBMockerGUI:
         
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            table_name = values[0]
+            table_name = values[1]  # Table name is now at index 1
             
             # Find table info
             table_info = next((t for t in self.schema.tables if t.name == table_name), None)
@@ -765,22 +797,24 @@ class DBMockerGUI:
                 continue
             
             # Smart selection logic
+            values[0] = "☑️"  # Select by default
+            
             if table_info.row_count > 0:
                 # Table has existing data - suggest using existing for small reference tables
                 if table_info.row_count < 100 and not dependencies.get(table_name, []):
                     # Small independent table with existing data - use existing
-                    values[1] = "Use Existing"
-                    values[2] = "0"
+                    values[2] = "Use Existing"  # Mode
+                    values[3] = "0"  # Rows
                 else:
                     # Larger table or has dependencies - generate new
-                    values[1] = "Generate New"
-                    values[2] = str(min(1000, table_info.row_count * 2))  # 2x existing data
+                    values[2] = "Generate New"  # Mode
+                    values[3] = str(min(1000, table_info.row_count * 2))  # 2x existing data
             else:
                 # Empty table - generate new data
-                values[1] = "Generate New"
-                values[2] = "500"  # Default for empty tables
+                values[2] = "Generate New"  # Mode
+                values[3] = "500"  # Default for empty tables
             
-            values[3] = "Ready"
+            values[4] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         
         self.update_selection_info()
@@ -801,22 +835,26 @@ class DBMockerGUI:
             return
         
         total_tables = len(self.config_tree.get_children())
+        selected_count = 0
         generate_count = 0
         existing_count = 0
         total_rows = 0
         
         for item in self.config_tree.get_children():
             values = self.config_tree.item(item, "values")
-            mode = values[1]
-            rows = int(values[2]) if values[2].isdigit() else 0
+            selected = values[0] == "☑️"
+            mode = values[2]  # Mode is now at index 2
+            rows = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
             
-            if mode == "Generate New" and rows > 0:
-                generate_count += 1
-                total_rows += rows
-            elif mode == "Use Existing":
-                existing_count += 1
+            if selected:
+                selected_count += 1
+                if mode == "Generate New" and rows > 0:
+                    generate_count += 1
+                    total_rows += rows
+                elif mode == "Use Existing":
+                    existing_count += 1
         
-        info_text = f"Tables: {total_tables} total | {generate_count} generating ({total_rows:,} rows) | {existing_count} using existing"
+        info_text = f"Tables: {total_tables} total | {selected_count} selected | {generate_count} generating ({total_rows:,} rows) | {existing_count} using existing"
         self.selection_info_var.set(info_text)
     
     def analyze_and_show_fk_dependencies(self):
@@ -1119,9 +1157,9 @@ class DBMockerGUI:
     
     def setup_done_button(self):
         """Setup the Done button at the bottom of the window."""
-        # Create a frame for the bottom buttons
-        bottom_frame = ttk.Frame(self.root)
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(0, 10))
+        # Create a frame for the bottom buttons - ensure it's at the very bottom
+        bottom_frame = ttk.LabelFrame(self.root, text="🔧 Actions", padding=10, relief='ridge', borderwidth=2)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(5, 8))
         
         # Add separator line
         separator = ttk.Separator(bottom_frame, orient='horizontal')
@@ -1395,16 +1433,20 @@ Enterprise-grade mock data generation for professional development.'''
         if table_configs and hasattr(self, 'config_tree'):
             for item in self.config_tree.get_children():
                 values = list(self.config_tree.item(item, "values"))
-                table_name = values[0]
+                table_name = values[1]  # Table name is now at index 1
                 
                 if table_name in table_configs:
                     table_config = table_configs[table_name]
+                    values[0] = "☑️"  # Select the table
+                    
                     if 'use_existing_data' in table_config and table_config['use_existing_data']:
-                        values[1] = "Use Existing"
-                        values[2] = "0"
+                        values[2] = "Use Existing"  # Mode at index 2
+                        values[3] = "0"  # Rows at index 3
                     elif 'rows_to_generate' in table_config:
-                        values[1] = "Generate New"
-                        values[2] = table_config['rows_to_generate']
+                        values[2] = "Generate New"  # Mode at index 2
+                        values[3] = table_config['rows_to_generate']  # Rows at index 3
+                    
+                    values[4] = "Ready"  # Status at index 4
                     self.config_tree.item(item, values=values)
     
     def extract_config_from_gui(self):
@@ -1829,24 +1871,27 @@ Enterprise-grade mock data generation for professional development.'''
             use_existing_tables=use_existing_tables
         )
         
-        # Add table configurations
+        # Add table configurations (only for selected tables)
         for item in self.config_tree.get_children():
             values = self.config_tree.item(item, "values")
-            table_name = values[0]
-            mode = values[1]
-            rows_to_generate = int(values[2])
+            selected = values[0] == "☑️"
+            table_name = values[1]  # Table name is now at index 1
+            mode = values[2]  # Mode is now at index 2
+            rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
             
-            if mode == "Use Existing":
-                use_existing_tables.append(table_name)
-                config.table_configs[table_name] = TableGenerationConfig(
-                    rows_to_generate=0,
-                    use_existing_data=True
-                )
-            else:
-                config.table_configs[table_name] = TableGenerationConfig(
-                    rows_to_generate=rows_to_generate,
-                    use_existing_data=False
-                )
+            # Only include selected tables
+            if selected:
+                if mode == "Use Existing":
+                    use_existing_tables.append(table_name)
+                    config.table_configs[table_name] = TableGenerationConfig(
+                        rows_to_generate=0,
+                        use_existing_data=True
+                    )
+                else:
+                    config.table_configs[table_name] = TableGenerationConfig(
+                        rows_to_generate=rows_to_generate,
+                        use_existing_data=False
+                    )
         
         return config
     
