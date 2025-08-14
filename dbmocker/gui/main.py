@@ -490,7 +490,7 @@ class DBMockerGUI:
         self.default_rows_var = tk.StringVar(value="1000")
         ttk.Entry(control_frame, textvariable=self.default_rows_var, width=10).pack(side=tk.LEFT, padx=(10, 0))
         
-        ttk.Button(control_frame, text="Apply to All Tables", 
+        ttk.Button(control_frame, text="Apply to Selected", 
                   command=self.apply_default_rows).pack(side=tk.RIGHT)
         
         # Bulk selection controls
@@ -767,12 +767,28 @@ class DBMockerGUI:
         self.update_selection_info()
     
     def apply_default_rows(self):
-        """Apply default row count to all tables."""
+        """Apply default row count to selected tables only."""
         default_rows = self.default_rows_var.get()
+        selected_count = 0
+        
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[3] = default_rows  # Row count is now index 3 (selected, table, mode, rows, status)
-            self.config_tree.item(item, values=values)
+            # Only apply to selected (checked) tables
+            if values[0] == "☑️":  # Check if table is selected
+                values[3] = default_rows  # Row count is now index 3 (selected, table, mode, rows, status)
+                self.config_tree.item(item, values=values)
+                selected_count += 1
+        
+        # Update selection info after changes
+        self.update_selection_info()
+        
+        # Show feedback message
+        if selected_count == 0:
+            tk.messagebox.showinfo("No Selection", 
+                                 "No tables are selected. Please select tables first using the checkboxes.")
+        else:
+            tk.messagebox.showinfo("Applied", 
+                                 f"Applied {default_rows} rows to {selected_count} selected table(s).")
     
     def handle_tree_click(self, event):
         """Handle clicks on the tree for checkbox and mode toggles."""
