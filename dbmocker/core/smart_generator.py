@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 class SmartFKValueManager:
     """Manages FK values using existing data and dependency awareness."""
     
-    def __init__(self, db_connection: DatabaseConnection, schema: DatabaseSchema):
+    def __init__(self, db_connection: DatabaseConnection, schema: DatabaseSchema, config: GenerationConfig = None):
         self.db_connection = db_connection
         self.schema = schema
+        self.config = config
         self._existing_values_cache: Dict[str, Dict[str, List[Any]]] = {}
         self._generated_values_cache: Dict[str, Dict[str, List[Any]]] = defaultdict(lambda: defaultdict(list))
         
@@ -65,6 +66,26 @@ class SmartFKValueManager:
         else:
             logger.warning(f"No available values for FK: {referenced_table}.{referenced_column}")
             return None
+    
+    def get_mixed_mode_fk_value(self, referenced_table: str, referenced_column: str = 'id') -> Optional[Any]:
+        """Get FK value in mixed mode, prioritizing existing data for tables marked as use_existing."""
+        if self.config and referenced_table in self.config.use_existing_tables:
+            # For tables marked as "use existing", only use existing data
+            existing_values = self.get_existing_values(referenced_table, referenced_column)
+            if existing_values:
+                return random.choice(existing_values)
+            else:
+                logger.warning(f"No existing values found for {referenced_table}.{referenced_column} (marked as use_existing)")
+                return None
+        else:
+            # For tables not marked as "use existing", prefer existing if configured, otherwise use all available
+            if self.config and self.config.prefer_existing_fk_values:
+                existing_values = self.get_existing_values(referenced_table, referenced_column)
+                if existing_values:
+                    return random.choice(existing_values)
+            
+            # Fall back to all available values (existing + generated)
+            return self.get_random_fk_value(referenced_table, referenced_column)
 
 
 class DependencyAwareGenerator(DataGenerator):
@@ -74,7 +95,7 @@ class DependencyAwareGenerator(DataGenerator):
         super().__init__(schema, config, db_connection)
         self.dependency_resolver = DependencyResolver(schema)
         self.insertion_plan = self.dependency_resolver.create_insertion_plan()
-        self.fk_manager = SmartFKValueManager(db_connection, schema)
+        self.fk_manager = SmartFKValueManager(db_connection, schema, config)
         
     def generate_data_for_all_tables(self, rows_per_table: int = 10) -> Dict[str, List[Dict[str, Any]]]:
         """Generate data for all tables in dependency order."""
@@ -98,14 +119,25 @@ class DependencyAwareGenerator(DataGenerator):
                     TableGenerationConfig(rows_to_generate=rows_per_table)
                 )
                 
-                # Generate data for this table
-                table_data = self._generate_table_data_smart(table, table_config)
-                all_data[table_name] = table_data
-                
-                # Cache generated primary key values for FK reference
-                self._cache_generated_pk_values(table, table_data)
-                
-                logger.info(f"Generated {len(table_data)} rows for {table_name}")
+                # Check if this table should use existing data (mixed mode)
+                if (table_name in self.config.use_existing_tables or 
+                    table_config.use_existing_data):
+                    logger.info(f"Skipping data generation for {table_name} - using existing data")
+                    all_data[table_name] = []  # Empty list indicates existing data should be used
+                    
+                    # Cache existing primary key values for FK reference
+                    self._cache_existing_pk_values(table)
+                    
+                    logger.info(f"Using existing data for {table_name}")
+                else:
+                    # Generate data for this table
+                    table_data = self._generate_table_data_smart(table, table_config)
+                    all_data[table_name] = table_data
+                    
+                    # Cache generated primary key values for FK reference
+                    self._cache_generated_pk_values(table, table_data)
+                    
+                    logger.info(f"Generated {len(table_data)} rows for {table_name}")
         
         return all_data
     
@@ -145,7 +177,7 @@ class DependencyAwareGenerator(DataGenerator):
                     # Generate the configured value
                     row[column.name] = self._generate_column_value(column, table_config, table)
                 else:
-                    # Use smart FK generation
+                    # Use smart FK generation with mixed mode support
                     fk_value = self._generate_smart_fk_value(table, column)
                     if fk_value is not None:
                         row[column.name] = fk_value
@@ -305,8 +337,8 @@ class DependencyAwareGenerator(DataGenerator):
             else 'id'
         )
         
-        # Get available FK values
-        fk_value = self.fk_manager.get_random_fk_value(referenced_table, referenced_column)
+        # Get available FK values using mixed mode logic
+        fk_value = self.fk_manager.get_mixed_mode_fk_value(referenced_table, referenced_column)
         
         return fk_value
     
@@ -319,6 +351,15 @@ class DependencyAwareGenerator(DataGenerator):
                 for row in table_data:
                     if pk_column in row and row[pk_column] is not None:
                         self.fk_manager.add_generated_value(table.name, pk_column, row[pk_column])
+    
+    def _cache_existing_pk_values(self, table: TableInfo):
+        """Cache existing primary key values for FK reference in mixed mode."""
+        pk_columns = table.get_primary_key_columns()
+        
+        for pk_column in pk_columns:
+            # Get existing values and cache them in the FK manager
+            existing_values = self.fk_manager.get_existing_values(table.name, pk_column)
+            logger.debug(f"Cached {len(existing_values)} existing PK values for {table.name}.{pk_column}")
     
     def get_insertion_plan(self) -> InsertionPlan:
         """Get the dependency-aware insertion plan."""

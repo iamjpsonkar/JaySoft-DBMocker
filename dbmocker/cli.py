@@ -178,6 +178,7 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
 @click.option('--batch-size', type=int, default=1000, help='Batch size for inserts')
 @click.option('--include-tables', help='Comma-separated list of tables to include')
 @click.option('--exclude-tables', help='Comma-separated list of tables to exclude')
+@click.option('--use-existing-tables', help='Comma-separated list of tables to use existing data from (mixed mode)')
 @click.option('--truncate/--no-truncate', default=False, help='Truncate existing data before insert')
 @click.option('--seed', type=int, help='Random seed for reproducible generation')
 @click.option('--dry-run', is_flag=True, help='Generate data but do not insert into database')
@@ -189,13 +190,14 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
 def generate(host: str, port: int, database: str, username: str, password: str,
             driver: str, config: Optional[str], rows: int, batch_size: int,
             include_tables: Optional[str], exclude_tables: Optional[str],
-            truncate: bool, seed: Optional[int], dry_run: bool, verify: bool,
-            analyze_existing_data: bool, pattern_sample_size: int):
+            use_existing_tables: Optional[str], truncate: bool, seed: Optional[int], 
+            dry_run: bool, verify: bool, analyze_existing_data: bool, pattern_sample_size: int):
     """Generate and insert mock data into database."""
     try:
         # Parse table lists
         include_list = include_tables.split(',') if include_tables else None
         exclude_list = exclude_tables.split(',') if exclude_tables else None
+        use_existing_list = use_existing_tables.split(',') if use_existing_tables else []
         
         # Load configuration
         generation_config = GenerationConfig(
@@ -203,6 +205,7 @@ def generate(host: str, port: int, database: str, username: str, password: str,
             seed=seed,
             include_tables=include_list,
             exclude_tables=exclude_list or [],
+            use_existing_tables=use_existing_list,
             truncate_existing=truncate
         )
         
@@ -261,6 +264,9 @@ def generate(host: str, port: int, database: str, username: str, password: str,
             click.echo(f"  Rows per table: {rows}")
             click.echo(f"  Batch size: {batch_size}")
             click.echo(f"  Processing order: {' → '.join(sorted_tables)}")
+            
+            if use_existing_list:
+                click.echo(f"  🔄 Using existing data: {', '.join(use_existing_list)}")
             
             if dry_run:
                 click.echo("  🔥 DRY RUN MODE - No data will be inserted")
@@ -473,8 +479,9 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
 @click.option('--seed', type=int, help='Random seed for reproducible data')
 @click.option('--show-plan', is_flag=True, help='Show dependency-aware insertion plan')
 @click.option('--auto-config', is_flag=True, help='Generate optimal configuration automatically')
+@click.option('--use-existing-tables', help='Comma-separated list of tables to use existing data from (mixed mode)')
 def smart_generate(driver, host, port, database, username, password, rows, batch_size, 
-                  config, truncate, dry_run, verify, seed, show_plan, auto_config):
+                  config, truncate, dry_run, verify, seed, show_plan, auto_config, use_existing_tables):
     """🧠 Smart dependency-aware data generation with optimal FK handling."""
     
     start_time = time.time()
@@ -536,11 +543,13 @@ def smart_generate(driver, host, port, database, username, password, rows, batch
             click.echo("✅ Auto-configuration created!")
         
         else:
+            use_existing_list = use_existing_tables.split(',') if use_existing_tables else []
             generation_config = GenerationConfig(
                 batch_size=batch_size,
                 truncate_existing=truncate,
                 preserve_existing_data=True,
-                reuse_existing_values=0.8  # High reuse for FK values
+                reuse_existing_values=0.8,  # High reuse for FK values
+                use_existing_tables=use_existing_list
             )
         
         # Create smart generator

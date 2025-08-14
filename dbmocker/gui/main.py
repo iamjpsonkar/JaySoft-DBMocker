@@ -421,15 +421,17 @@ class DBMockerGUI:
                   command=self.apply_default_rows).pack(side=tk.RIGHT)
         
         # Table configuration tree
-        config_columns = ("table", "rows", "status")
+        config_columns = ("table", "mode", "rows", "status")
         self.config_tree = ttk.Treeview(table_config_frame, columns=config_columns, show="headings", height=10)
         
         self.config_tree.heading("table", text="Table Name")
+        self.config_tree.heading("mode", text="Data Mode")
         self.config_tree.heading("rows", text="Rows to Generate")
         self.config_tree.heading("status", text="Status")
         
-        self.config_tree.column("table", width=200)
-        self.config_tree.column("rows", width=150)
+        self.config_tree.column("table", width=180)
+        self.config_tree.column("mode", width=130)
+        self.config_tree.column("rows", width=120)
         self.config_tree.column("status", width=100)
         
         config_scrollbar = ttk.Scrollbar(table_config_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
@@ -437,6 +439,9 @@ class DBMockerGUI:
         
         self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind double-click to toggle mode
+        self.config_tree.bind("<Double-1>", self.toggle_table_mode)
     
     def setup_generation_tab(self):
         """Setup data generation tab."""
@@ -617,6 +622,7 @@ class DBMockerGUI:
         for table in schema.tables:
             self.config_tree.insert("", tk.END, values=(
                 table.name,
+                "Generate New",  # Default mode
                 self.default_rows_var.get(),
                 "Ready"
             ))
@@ -626,7 +632,29 @@ class DBMockerGUI:
         default_rows = self.default_rows_var.get()
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
-            values[1] = default_rows
+            values[2] = default_rows  # Row count is now index 2 (table, mode, rows, status)
+            self.config_tree.item(item, values=values)
+    
+    def toggle_table_mode(self, event):
+        """Toggle between 'Generate New' and 'Use Existing' for a table."""
+        item = self.config_tree.selection()[0] if self.config_tree.selection() else None
+        if not item:
+            return
+        
+        # Check if click was on the mode column
+        column = self.config_tree.identify_column(event.x)
+        if column == "#2":  # Mode column (0-indexed as #2)
+            values = list(self.config_tree.item(item, "values"))
+            current_mode = values[1]
+            
+            # Toggle mode
+            if current_mode == "Generate New":
+                values[1] = "Use Existing"
+                values[2] = "0"  # Set rows to 0 for existing data
+            else:
+                values[1] = "Generate New"
+                values[2] = str(self.default_rows_var.get())  # Reset to default rows
+            
             self.config_tree.item(item, values=values)
     
     def setup_advanced_tab(self):
@@ -1099,9 +1127,13 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 if table_name in table_configs:
                     table_config = table_configs[table_name]
-                    if 'rows_to_generate' in table_config:
-                        values[1] = table_config['rows_to_generate']
-                        self.config_tree.item(item, values=values)
+                    if 'use_existing_data' in table_config and table_config['use_existing_data']:
+                        values[1] = "Use Existing"
+                        values[2] = "0"
+                    elif 'rows_to_generate' in table_config:
+                        values[1] = "Generate New"
+                        values[2] = table_config['rows_to_generate']
+                    self.config_tree.item(item, values=values)
     
     def extract_config_from_gui(self):
         """Extract configuration from GUI elements."""
@@ -1357,30 +1389,42 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 # Collect table configurations from GUI and validate against schema
                 table_configs = {}
+                use_existing_tables = []
                 schema_table_names = {table.name for table in self.schema.tables}
                 skipped_tables = []
                 
                 for item in self.config_tree.get_children():
                     values = self.config_tree.item(item, "values")
                     table_name = values[0]
-                    rows_to_generate = int(values[1])
+                    mode = values[1]
+                    rows_to_generate = int(values[2])
                     
-                    if rows_to_generate > 0:
-                        # Only include tables that exist in schema
-                        if table_name in schema_table_names:
+                    # Only include tables that exist in schema
+                    if table_name in schema_table_names:
+                        if mode == "Use Existing":
+                            use_existing_tables.append(table_name)
+                            # Don't add to table_configs as we're using existing data
+                        elif rows_to_generate > 0:
                             table_configs[table_name] = rows_to_generate
-                        else:
-                            skipped_tables.append(table_name)
-                            self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in current schema analysis"))
+                    else:
+                        skipped_tables.append(table_name)
+                        self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in current schema analysis"))
                 
                 if skipped_tables:
                     self.result_queue.put(("progress", f"📋 Skipped {len(skipped_tables)} tables not in schema: {', '.join(skipped_tables)}"))
                 
-                if not table_configs:
-                    self.result_queue.put(("error", "No valid tables selected for generation"))
+                if not table_configs and not use_existing_tables:
+                    self.result_queue.put(("error", "No valid tables selected for generation or using existing data"))
                     return
                 
-                self.result_queue.put(("progress", f"📊 Processing {len(table_configs)} valid tables: {', '.join(table_configs.keys())}"))
+                # Build status message
+                status_parts = []
+                if table_configs:
+                    status_parts.append(f"{len(table_configs)} tables generating new data: {', '.join(table_configs.keys())}")
+                if use_existing_tables:
+                    status_parts.append(f"{len(use_existing_tables)} tables using existing data: {', '.join(use_existing_tables)}")
+                
+                self.result_queue.put(("progress", f"📊 Processing {' | '.join(status_parts)}"))
                 
                 # If we skipped tables, refresh config tree to remove them
                 if skipped_tables:
@@ -1504,21 +1548,33 @@ Enterprise-grade mock data generation for professional development.'''
     
     def build_generation_config(self) -> GenerationConfig:
         """Build generation configuration from GUI settings."""
+        use_existing_tables = []
+        
         config = GenerationConfig(
             batch_size=int(self.batch_size_var.get()) if self.batch_size_var.get() else 1000,
             seed=int(self.seed_var.get()) if self.seed_var.get() else None,
-            truncate_existing=self.truncate_var.get()
+            truncate_existing=self.truncate_var.get(),
+            use_existing_tables=use_existing_tables
         )
         
         # Add table configurations
         for item in self.config_tree.get_children():
             values = self.config_tree.item(item, "values")
             table_name = values[0]
-            rows_to_generate = int(values[1])
+            mode = values[1]
+            rows_to_generate = int(values[2])
             
-            config.table_configs[table_name] = TableGenerationConfig(
-                rows_to_generate=rows_to_generate
-            )
+            if mode == "Use Existing":
+                use_existing_tables.append(table_name)
+                config.table_configs[table_name] = TableGenerationConfig(
+                    rows_to_generate=0,
+                    use_existing_data=True
+                )
+            else:
+                config.table_configs[table_name] = TableGenerationConfig(
+                    rows_to_generate=rows_to_generate,
+                    use_existing_data=False
+                )
         
         return config
     

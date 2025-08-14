@@ -206,6 +206,14 @@ class GenerationConfig(BaseModel):
         default=0.3, description="Probability of reusing existing values"
     )
     
+    # Mixed generation mode
+    use_existing_tables: List[str] = Field(
+        default_factory=list, description="Tables to use existing data from (mixed mode)"
+    )
+    prefer_existing_fk_values: bool = Field(
+        default=True, description="Prefer existing FK values over generated ones in mixed mode"
+    )
+    
     # Pattern analysis options (NEW FEATURE)
     analyze_existing_data: bool = Field(
         default=False, description="Analyze existing data for realistic generation patterns"
@@ -233,6 +241,11 @@ class TableGenerationConfig(BaseModel):
     """Configuration for generating data for a specific table."""
     
     rows_to_generate: int = Field(default=1000, description="Number of rows to generate")
+    
+    # Table generation mode
+    use_existing_data: bool = Field(
+        default=False, description="Use existing data instead of generating new rows"
+    )
     
     # Column-specific overrides
     column_configs: Dict[str, "ColumnGenerationConfig"] = Field(
