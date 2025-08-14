@@ -100,8 +100,8 @@ tables:
       # Boolean with weighted probability
       is_active:
         weighted_values:
-          true: 0.9
-          false: 0.1
+          "true": 0.9
+          "false": 0.1
 
   # Categories table
   categories:
@@ -367,11 +367,11 @@ tables:
       # Rating
       rating:
         weighted_values:
-          1: 0.05
-          2: 0.05
-          3: 0.15
-          4: 0.35
-          5: 0.40
+          "1": 0.05
+          "2": 0.05
+          "3": 0.15
+          "4": 0.35
+          "5": 0.40
       
       # Review title
       title:
@@ -390,8 +390,8 @@ tables:
       # Verification status
       is_verified:
         weighted_values:
-          true: 0.7
-          false: 0.3
+          "true": 0.7
+          "false": 0.3
       
       # Helpful count
       helpful_count:
@@ -445,8 +445,8 @@ tables:
       
       is_public:
         weighted_values:
-          true: 0.3
-          false: 0.7
+          "true": 0.3
+          "false": 0.7
 
   # Wishlist items table
   wishlist_items:
@@ -459,12 +459,12 @@ tables:
       
       priority:
         weighted_values:
-          0: 0.4   # Low priority
-          1: 0.3   # Medium-low
-          2: 0.15  # Medium
-          3: 0.1   # Medium-high
-          4: 0.04  # High
-          5: 0.01  # Very high
+          "0": 0.4   # Low priority
+          "1": 0.3   # Medium-low
+          "2": 0.15  # Medium
+          "3": 0.1   # Medium-high
+          "4": 0.04  # High
+          "5": 0.01  # Very high
 
   # Coupons table
   coupons:
@@ -518,16 +518,16 @@ tables:
       # User limit
       user_limit:
         weighted_values:
-          1: 0.7    # One use per user
-          2: 0.15   # Two uses per user
-          3: 0.1    # Three uses per user
-          5: 0.05   # Five uses per user
+          "1": 0.7    # One use per user
+          "2": 0.15   # Two uses per user
+          "3": 0.1    # Three uses per user
+          "5": 0.05   # Five uses per user
       
       # Active status
       is_active:
         weighted_values:
-          true: 0.8
-          false: 0.2
+          "true": 0.8
+          "false": 0.2
 
 # Advanced options (optional)
 advanced:
