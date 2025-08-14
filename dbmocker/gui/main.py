@@ -927,7 +927,7 @@ class DBMockerGUI:
         return duplicate_allowed_columns
     
     def _show_duplicate_columns_info(self, table_name: str, duplicate_mode: str):
-        """Show information about which columns will be affected by duplicate mode."""
+        """Show column selection dialog for duplicate mode configuration."""
         duplicate_allowed_columns = self._get_duplicate_allowed_columns(table_name)
         
         if not duplicate_allowed_columns:
@@ -942,24 +942,181 @@ class DBMockerGUI:
                 f"The duplicate mode will have no effect on this table."
             )
         else:
-            # Organize columns for better display
-            column_list = ", ".join(duplicate_allowed_columns)
-            if len(duplicate_allowed_columns) > 10:
-                # Show first 10 and count
-                shown_columns = ", ".join(duplicate_allowed_columns[:10])
-                column_list = f"{shown_columns} ... and {len(duplicate_allowed_columns) - 10} more"
+            # Show column selection dialog
+            self._show_duplicate_column_selection_dialog(table_name, duplicate_mode, duplicate_allowed_columns)
+    
+    def _show_duplicate_column_selection_dialog(self, table_name: str, duplicate_mode: str, allowed_columns: list):
+        """Show dialog for selecting which columns should have duplicates."""
+        # Create dialog window
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Select Duplicate Columns - {table_name}")
+        dialog.geometry("600x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Main frame
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Header
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Label(header_frame, text=f"🎯 Configure Duplicate Columns", 
+                 font=("Arial", 14, "bold")).pack()
+        ttk.Label(header_frame, text=f"Table: {table_name} | Mode: {duplicate_mode}",
+                 font=("Arial", 10)).pack()
+        
+        # Description
+        mode_descriptions = {
+            "Allow Duplicates": "Selected columns will have the same value for all rows",
+            "Smart Duplicates": "Selected columns will have limited value sets with controlled probability"
+        }
+        
+        desc_frame = ttk.LabelFrame(main_frame, text="ℹ️ How it works", padding=10)
+        desc_frame.pack(fill=tk.X, pady=(0, 15))
+        ttk.Label(desc_frame, text=mode_descriptions.get(duplicate_mode, ""),
+                 wraplength=500).pack()
+        
+        # Column selection frame
+        selection_frame = ttk.LabelFrame(main_frame, text="📋 Select Columns for Duplicates", padding=10)
+        selection_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # Canvas and scrollbar for column list
+        canvas = tk.Canvas(selection_frame, height=200)
+        scrollbar = ttk.Scrollbar(selection_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Selection controls
+        control_frame = ttk.Frame(selection_frame)
+        control_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(control_frame, text="✅ Select All", 
+                  command=lambda: self._select_all_columns(column_vars, True)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(control_frame, text="❌ Clear All", 
+                  command=lambda: self._select_all_columns(column_vars, False)).pack(side=tk.LEFT)
+        
+        # Store column variables
+        column_vars = {}
+        
+        # Get table info for column details
+        table = self.schema.get_table(table_name) if self.schema else None
+        
+        # Create checkboxes for each allowed column
+        for i, column_name in enumerate(allowed_columns):
+            frame = ttk.Frame(scrollable_frame)
+            frame.pack(fill=tk.X, pady=2)
             
-            mode_description = {
-                "Allow Duplicates": "All rows will have the same value for these columns",
-                "Smart Duplicates": "Limited set of values with controlled probability distribution"
-            }
+            # Column checkbox
+            var = tk.BooleanVar(value=True)  # Default to selected
+            column_vars[column_name] = var
+            
+            checkbox = ttk.Checkbutton(frame, variable=var, text=column_name)
+            checkbox.pack(side=tk.LEFT)
+            
+            # Column type info
+            if table:
+                column_info = table.get_column(column_name)
+                if column_info:
+                    type_text = f"({column_info.data_type.value}"
+                    if column_info.max_length:
+                        type_text += f", max:{column_info.max_length}"
+                    type_text += ")"
+                    
+                    ttk.Label(frame, text=type_text, foreground="gray").pack(side=tk.LEFT, padx=(10, 0))
+        
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Summary
+        summary_frame = ttk.Frame(main_frame)
+        summary_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        total_columns = len(self.schema.get_table(table_name).columns) if self.schema and self.schema.get_table(table_name) else len(allowed_columns)
+        summary_text = f"📊 {len(allowed_columns)} out of {total_columns} columns can have duplicates (others excluded due to constraints)"
+        ttk.Label(summary_frame, text=summary_text, foreground="blue").pack()
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def apply_selection():
+            selected_columns = [col for col, var in column_vars.items() if var.get()]
+            self._store_duplicate_column_selection(table_name, duplicate_mode, selected_columns)
+            dialog.destroy()
+        
+        def cancel_selection():
+            # Reset duplicate mode to Generate New
+            for item in self.config_tree.get_children():
+                values = list(self.config_tree.item(item, "values"))
+                if values[1] == table_name:  # Table name at index 1
+                    values[3] = "Generate New"  # Reset duplicate mode
+                    self.config_tree.item(item, values=values)
+                    break
+            dialog.destroy()
+        
+        ttk.Button(button_frame, text="✅ Apply", command=apply_selection).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(button_frame, text="❌ Cancel", command=cancel_selection).pack(side=tk.RIGHT)
+        
+        # Focus the dialog
+        dialog.focus_set()
+    
+    def _select_all_columns(self, column_vars: dict, select: bool):
+        """Select or deselect all columns in the duplicate column dialog."""
+        for var in column_vars.values():
+            var.set(select)
+    
+    def _store_duplicate_column_selection(self, table_name: str, duplicate_mode: str, selected_columns: list):
+        """Store the user's duplicate column selection for use during generation."""
+        # Initialize storage if needed
+        if not hasattr(self, '_duplicate_column_selections'):
+            self._duplicate_column_selections = {}
+        
+        # Store the selection
+        self._duplicate_column_selections[table_name] = {
+            'mode': duplicate_mode,
+            'columns': selected_columns
+        }
+        
+        # Show confirmation
+        if selected_columns:
+            column_text = ", ".join(selected_columns)
+            if len(column_text) > 100:
+                column_text = column_text[:100] + "..."
             
             tk.messagebox.showinfo(
-                f"Duplicate Mode: {duplicate_mode}",
-                f"✅ Table '{table_name}' - {duplicate_mode} mode activated\n\n"
-                f"📋 Columns that will have duplicate values:\n{column_list}\n\n"
-                f"🎯 How it works:\n{mode_description.get(duplicate_mode, '')}\n\n"
-                f"ℹ️ Total columns affected: {len(duplicate_allowed_columns)} out of {len(self.schema.get_table(table_name).columns) if self.schema.get_table(table_name) else '?'} total columns"
+                "Duplicate Configuration Applied",
+                f"✅ Table '{table_name}' - {duplicate_mode} mode\n\n"
+                f"📋 Selected columns for duplicates:\n{column_text}\n\n"
+                f"ℹ️ {len(selected_columns)} columns configured for duplicate generation"
+            )
+        else:
+            # No columns selected, revert to Generate New
+            for item in self.config_tree.get_children():
+                values = list(self.config_tree.item(item, "values"))
+                if values[1] == table_name:  # Table name at index 1
+                    values[3] = "Generate New"  # Reset duplicate mode
+                    self.config_tree.item(item, values=values)
+                    break
+            
+            tk.messagebox.showinfo(
+                "No Columns Selected",
+                f"No columns were selected for duplicates.\n"
+                f"Duplicate mode for '{table_name}' has been reset to 'Generate New'."
             )
     
     def validate_current_tab(self):
@@ -2319,17 +2476,24 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 # Add duplicate mode configurations from GUI
                 if duplicate_mode and duplicate_mode != "Generate New":
-                    # Automatically detect all columns that can safely have duplicates
-                    duplicate_allowed_columns = self._get_duplicate_allowed_columns(table_name)
+                    # Use user's column selection if available, otherwise detect all allowed columns
+                    user_selected_columns = []
+                    if (hasattr(self, '_duplicate_column_selections') and 
+                        table_name in self._duplicate_column_selections):
+                        user_selected_columns = self._duplicate_column_selections[table_name]['columns']
+                    
+                    # If no user selection, fall back to all allowed columns (backward compatibility)
+                    if not user_selected_columns:
+                        user_selected_columns = self._get_duplicate_allowed_columns(table_name)
                     
                     # Store duplicate info for logging during generation (safer for threading)
                     if not hasattr(table_config, '_duplicate_info'):
                         table_config._duplicate_info = {
                             'mode': duplicate_mode,
-                            'columns': duplicate_allowed_columns
+                            'columns': user_selected_columns
                         }
                     
-                    for column_name in duplicate_allowed_columns:
+                    for column_name in user_selected_columns:
                         if duplicate_mode == "Allow Duplicates":
                             table_config.column_configs[column_name] = ColumnGenerationConfig(
                                 duplicate_mode="allow_duplicates"
