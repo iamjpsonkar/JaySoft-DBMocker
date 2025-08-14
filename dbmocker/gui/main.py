@@ -804,15 +804,15 @@ class DBMockerGUI:
         # Clear existing items
         self.config_tree.delete(*self.config_tree.get_children())
         
-        # Add tables with default configuration (deselected by default)
+        # Add tables with default configuration (selected by default for better UX)
         for table in schema.tables:
             self.config_tree.insert("", tk.END, values=(
-                "☐",  # Deselected by default for normal workflow
+                "☑️",  # Selected by default for better user experience
                 table.name,
                 "Generate New",  # Default mode
                 "Generate New",  # Default duplicate mode
                 self.default_rows_var.get(),
-                "Disabled"  # Disabled since not selected
+                "Ready"  # Ready since selected by default
             ))
         
         # Update selection info
