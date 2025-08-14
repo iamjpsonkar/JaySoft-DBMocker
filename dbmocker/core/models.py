@@ -23,9 +23,33 @@ class ColumnType(Enum):
     DATETIME = "datetime"
     TIMESTAMP = "timestamp"
     JSON = "json"
+    JSONB = "jsonb"  # PostgreSQL binary JSON
     BLOB = "blob"
     UUID = "uuid"
     ENUM = "enum"
+    
+    # Network and address types
+    INET = "inet"  # IP address
+    CIDR = "cidr"  # Network address
+    MACADDR = "macaddr"  # MAC address
+    
+    # Spatial/Geometry types
+    GEOMETRY = "geometry"
+    POINT = "point"
+    POLYGON = "polygon"
+    
+    # Array types
+    ARRAY = "array"
+    
+    # Financial types
+    MONEY = "money"
+    
+    # Binary types
+    BYTEA = "bytea"  # PostgreSQL binary data
+    VARBINARY = "varbinary"  # MySQL binary
+    
+    # XML type
+    XML = "xml"
 
 
 class ConstraintType(Enum):
@@ -129,6 +153,7 @@ class DatabaseSchema:
     views: List[str] = field(default_factory=list)
     functions: List[str] = field(default_factory=list)
     procedures: List[str] = field(default_factory=list)
+    table_patterns: Dict[str, Any] = field(default_factory=dict)  # For pattern analysis results
     
     def get_table(self, name: str) -> Optional[TableInfo]:
         """Get table by name."""
@@ -179,6 +204,14 @@ class GenerationConfig(BaseModel):
     )
     reuse_existing_values: float = Field(
         default=0.3, description="Probability of reusing existing values"
+    )
+    
+    # Pattern analysis options (NEW FEATURE)
+    analyze_existing_data: bool = Field(
+        default=False, description="Analyze existing data for realistic generation patterns"
+    )
+    pattern_sample_size: int = Field(
+        default=1000, description="Sample size for existing data pattern analysis"
     )
 
 

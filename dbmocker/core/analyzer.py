@@ -28,7 +28,9 @@ class SchemaAnalyzer:
         
     def analyze_schema(self, include_tables: Optional[List[str]] = None,
                       exclude_tables: Optional[List[str]] = None,
-                      analyze_data_patterns: bool = True) -> DatabaseSchema:
+                      analyze_data_patterns: bool = True,
+                      analyze_existing_data: bool = False,
+                      pattern_sample_size: int = 1000) -> DatabaseSchema:
         """Analyze complete database schema."""
         logger.info("Starting database schema analysis")
         
@@ -40,14 +42,70 @@ class SchemaAnalyzer:
         # Get database name
         database_name = self._get_database_name()
         
-        # Get all table names
-        table_names = self.inspector.get_table_names()
+        # Get all table names using multiple methods for consistency
+        table_names = []
+        
+        # Method 1: Use SQLAlchemy inspector (primary method)
+        try:
+            table_names = self.inspector.get_table_names()
+            logger.debug(f"Inspector found tables: {table_names}")
+        except Exception as e:
+            logger.warning(f"Inspector method failed: {e}")
+        
+        # Method 2: Fallback to direct SQL query for comprehensive discovery
+        if not table_names:
+            try:
+                if self.db_connection.config.driver == "mysql":
+                    result = self.db_connection.execute_query("SHOW TABLES")
+                    table_names = [row[0] for row in result] if result else []
+                elif self.db_connection.config.driver == "postgresql":
+                    result = self.db_connection.execute_query(
+                        "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                    )
+                    table_names = [row[0] for row in result] if result else []
+                elif self.db_connection.config.driver == "sqlite":
+                    result = self.db_connection.execute_query(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                    table_names = [row[0] for row in result] if result else []
+                logger.debug(f"Direct SQL found tables: {table_names}")
+            except Exception as e:
+                logger.warning(f"Direct SQL method failed: {e}")
+        
+        # Ensure we have some tables
+        if not table_names:
+            logger.warning("No tables found in database")
+            return DatabaseSchema(database_name=database_name, tables=[], views=[])
         
         # Filter tables based on include/exclude lists
+        original_count = len(table_names)
+        
         if include_tables:
             table_names = [t for t in table_names if t in include_tables]
+            logger.info(f"Filtered to included tables: {len(table_names)}/{original_count}")
+        
         if exclude_tables:
             table_names = [t for t in table_names if t not in exclude_tables]
+            logger.info(f"Excluded tables: {len(table_names)}/{original_count}")
+        
+        # Filter out common system/migration tables
+        system_tables = {
+            'alembic_version',  # Alembic migration table
+            'django_migrations',  # Django migration table
+            'schema_migrations',  # Rails migration table
+            'flyway_schema_history',  # Flyway migration table
+            'information_schema',  # MySQL system schema
+            'performance_schema',  # MySQL performance schema
+            'mysql',  # MySQL system database
+            'sys'  # MySQL/SQL Server system schema
+        }
+        
+        # Auto-exclude system tables unless explicitly included
+        if not include_tables:  # Only auto-exclude if no specific tables requested
+            before_system_filter = len(table_names)
+            table_names = [t for t in table_names if t not in system_tables]
+            if before_system_filter != len(table_names):
+                logger.info(f"Filtered out {before_system_filter - len(table_names)} system tables")
         
         logger.info(f"Found {len(table_names)} tables to analyze: {table_names}")
         
@@ -70,6 +128,28 @@ class SchemaAnalyzer:
             tables=tables,
             views=self.inspector.get_view_names(),
         )
+        
+        # Perform existing data pattern analysis if requested
+        if analyze_existing_data:
+            logger.info("Starting existing data pattern analysis")
+            from .pattern_analyzer import ExistingDataAnalyzer
+            
+            pattern_analyzer = ExistingDataAnalyzer(self.db_connection)
+            pattern_analyzer.sample_size = pattern_sample_size
+            
+            table_patterns = {}
+            for table in tables:
+                if table.row_count > 0:  # Only analyze tables with data
+                    try:
+                        pattern = pattern_analyzer.analyze_table_patterns(table, pattern_sample_size)
+                        table_patterns[table.name] = pattern
+                        logger.info(f"Analyzed patterns for {table.name}: {pattern.total_records} records")
+                    except Exception as e:
+                        logger.warning(f"Failed to analyze patterns for {table.name}: {e}")
+            
+            # Store patterns in schema for later use
+            schema.table_patterns = table_patterns
+            logger.info(f"Pattern analysis complete. Analyzed {len(table_patterns)} tables with existing data.")
         
         logger.info(f"Schema analysis complete. Analyzed {len(tables)} tables.")
         return schema
@@ -183,13 +263,47 @@ class SchemaAnalyzer:
         # Other types
         elif any(t in type_name for t in ["boolean", "bool"]):
             return ColumnType.BOOLEAN
+        elif "jsonb" in type_name:
+            return ColumnType.JSONB
         elif "json" in type_name:
             return ColumnType.JSON
         elif any(t in type_name for t in ["uuid", "guid"]):
             return ColumnType.UUID
         elif "enum" in type_name:
             return ColumnType.ENUM
-        elif any(t in type_name for t in ["blob", "binary", "bytea"]):
+        elif "xml" in type_name:
+            return ColumnType.XML
+        
+        # Network types
+        elif "inet" in type_name:
+            return ColumnType.INET
+        elif "cidr" in type_name:
+            return ColumnType.CIDR
+        elif "macaddr" in type_name:
+            return ColumnType.MACADDR
+        
+        # Spatial types
+        elif "geometry" in type_name:
+            return ColumnType.GEOMETRY
+        elif "point" in type_name:
+            return ColumnType.POINT
+        elif "polygon" in type_name:
+            return ColumnType.POLYGON
+        
+        # Array types
+        elif "array" in type_name or "[]" in type_name:
+            return ColumnType.ARRAY
+        
+        # Financial types
+        elif "money" in type_name:
+            return ColumnType.MONEY
+        
+        # Binary types
+        elif "bytea" in type_name:
+            return ColumnType.BYTEA
+        elif "varbinary" in type_name:
+            return ColumnType.VARBINARY
+        elif any(t in type_name for t in ["blob", "binary"]):
             return ColumnType.BLOB
         
         # Default to VARCHAR for unknown types
@@ -208,9 +322,11 @@ class SchemaAnalyzer:
             if hasattr(sqlalchemy_type, "scale") and sqlalchemy_type.scale:
                 col_info.scale = sqlalchemy_type.scale
             
-            # Enum values
+            # ENUM values
             if hasattr(sqlalchemy_type, "enums") and sqlalchemy_type.enums:
                 col_info.enum_values = list(sqlalchemy_type.enums)
+            elif hasattr(sqlalchemy_type, "_enums") and sqlalchemy_type._enums:
+                col_info.enum_values = list(sqlalchemy_type._enums)
         except Exception as e:
             logger.debug(f"Could not extract type attributes: {e}")
     
@@ -290,7 +406,8 @@ class SchemaAnalyzer:
     def _get_row_count(self, table_name: str) -> int:
         """Get approximate row count for a table."""
         try:
-            result = self.db_connection.execute_query(f"SELECT COUNT(*) FROM {table_name}")
+            quoted_table = self.db_connection.quote_identifier(table_name)
+            result = self.db_connection.execute_query(f"SELECT COUNT(*) FROM {quoted_table}")
             return result[0][0] if result else 0
         except Exception as e:
             logger.debug(f"Could not get row count for {table_name}: {e}")
@@ -307,7 +424,8 @@ class SchemaAnalyzer:
         
         try:
             # Get sample data
-            query = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+            quoted_table = self.db_connection.quote_identifier(table_name)
+            query = f"SELECT * FROM {quoted_table} LIMIT {sample_size}"
             sample_data = self.db_connection.execute_query(query)
             
             if not sample_data:

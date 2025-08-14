@@ -33,7 +33,8 @@ class DataInserter:
         
         table = self.schema.get_table(table_name)
         if not table:
-            raise ValueError(f"Table {table_name} not found in schema")
+            logger.warning(f"Table {table_name} not found in schema, skipping insertion")
+            return GenerationStats()
         
         logger.info(f"Inserting {len(data)} rows into table: {table_name}")
         start_time = time.time()
@@ -98,12 +99,13 @@ class DataInserter:
         
         try:
             with self.db_connection.get_session() as session:
-                # Build insert query
+                # Build insert query with properly quoted column names
                 column_names = list(batch[0].keys())
                 placeholders = ', '.join([f':{col}' for col in column_names])
-                columns_str = ', '.join(column_names)
+                quoted_columns = ', '.join([self.db_connection.quote_identifier(col) for col in column_names])
                 
-                query = f"INSERT INTO {table.name} ({columns_str}) VALUES ({placeholders})"
+                quoted_table = self.db_connection.quote_identifier(table.name)
+                query = f"INSERT INTO {quoted_table} ({quoted_columns}) VALUES ({placeholders})"
                 
                 # Execute batch insert
                 session.execute(text(query), batch)
@@ -133,11 +135,12 @@ class DataInserter:
                     session.execute(text("PRAGMA foreign_keys = OFF"))
                 
                 # Truncate table (use DELETE for SQLite)
+                quoted_table = self.db_connection.quote_identifier(table_name)
                 if self.db_connection.config.driver == "sqlite":
-                    session.execute(text(f"DELETE FROM {table_name}"))
+                    session.execute(text(f"DELETE FROM {quoted_table}"))
                     session.execute(text(f"DELETE FROM sqlite_sequence WHERE name='{table_name}'"))  # Reset autoincrement
                 else:
-                    session.execute(text(f"TRUNCATE TABLE {table_name}"))
+                    session.execute(text(f"TRUNCATE TABLE {quoted_table}"))
                 
                 # Re-enable foreign key checks
                 if self.db_connection.config.driver == "mysql":
@@ -220,7 +223,8 @@ class DataInserter:
     def get_table_row_count(self, table_name: str) -> int:
         """Get current row count for a table."""
         try:
-            result = self.db_connection.execute_query(f"SELECT COUNT(*) FROM {table_name}")
+            quoted_table = self.db_connection.quote_identifier(table_name)
+            result = self.db_connection.execute_query(f"SELECT COUNT(*) FROM {quoted_table}")
             return result[0][0] if result else 0
         except Exception as e:
             logger.error(f"Failed to get row count for {table_name}: {e}")
@@ -289,9 +293,12 @@ class DataInserter:
             local_columns = ', '.join(fk_constraint.columns)
             referenced_columns = ', '.join(fk_constraint.referenced_columns or ['id'])
             
+            quoted_table = self.db_connection.quote_identifier(table_name)
+            quoted_ref_table = self.db_connection.quote_identifier(fk_constraint.referenced_table)
+            
             query = f"""
-                SELECT COUNT(*) FROM {table_name} t1
-                LEFT JOIN {fk_constraint.referenced_table} t2
+                SELECT COUNT(*) FROM {quoted_table} t1
+                LEFT JOIN {quoted_ref_table} t2
                 ON {' AND '.join([
                     f't1.{lc} = t2.{rc}' 
                     for lc, rc in zip(fk_constraint.columns, fk_constraint.referenced_columns or ['id'])

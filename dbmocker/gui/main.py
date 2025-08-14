@@ -13,6 +13,10 @@ from dbmocker.core.analyzer import SchemaAnalyzer
 from dbmocker.core.generator import DataGenerator
 from dbmocker.core.inserter import DataInserter
 from dbmocker.core.models import GenerationConfig, TableGenerationConfig
+from dbmocker.core.db_spec_analyzer import DatabaseSpecAnalyzer
+from dbmocker.core.spec_driven_generator import SpecificationDrivenGenerator
+from dbmocker.core.dependency_resolver import DependencyResolver, print_insertion_plan
+from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optimal_generation_config
 
 
 class DBMockerGUI:
@@ -61,6 +65,11 @@ class DBMockerGUI:
         self.notebook.add(self.config_frame, text="Generation Config")
         self.setup_config_tab()
         
+        # Advanced Options tab
+        self.advanced_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.advanced_frame, text="🔧 Advanced")
+        self.setup_advanced_tab()
+        
         # Generation tab
         self.generation_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.generation_frame, text="Data Generation")
@@ -87,7 +96,7 @@ class DBMockerGUI:
         
         # Database driver
         ttk.Label(form_frame, text="Database Type:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.driver_var = tk.StringVar(value="postgresql")
+        self.driver_var = tk.StringVar(value="mysql")
         driver_combo = ttk.Combobox(form_frame, textvariable=self.driver_var, 
                                    values=["postgresql", "mysql", "sqlite"], state="readonly")
         driver_combo.grid(row=0, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
@@ -99,7 +108,7 @@ class DBMockerGUI:
         
         # Port
         ttk.Label(form_frame, text="Port:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        self.port_var = tk.StringVar(value="5432")
+        self.port_var = tk.StringVar(value="3306")
         ttk.Entry(form_frame, textvariable=self.port_var).grid(row=2, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         
         # Database
@@ -109,12 +118,12 @@ class DBMockerGUI:
         
         # Username
         ttk.Label(form_frame, text="Username:").grid(row=4, column=0, sticky=tk.W, pady=5)
-        self.username_var = tk.StringVar()
+        self.username_var = tk.StringVar(value="root")
         ttk.Entry(form_frame, textvariable=self.username_var).grid(row=4, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         
         # Password
         ttk.Label(form_frame, text="Password:").grid(row=5, column=0, sticky=tk.W, pady=5)
-        self.password_var = tk.StringVar()
+        self.password_var = tk.StringVar(value="")
         ttk.Entry(form_frame, textvariable=self.password_var, show="*").grid(row=5, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         
         form_frame.columnconfigure(1, weight=1)
@@ -263,6 +272,14 @@ class DBMockerGUI:
         ttk.Checkbutton(controls_frame, text="Verify integrity", 
                        variable=self.verify_var).pack(side=tk.LEFT, padx=(20, 0))
         
+        self.spec_driven_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls_frame, text="🔍 Spec-driven (DESCRIBE-based)", 
+                       variable=self.spec_driven_var).pack(side=tk.LEFT, padx=(20, 0))
+        
+        self.dependency_aware_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(controls_frame, text="🔗 Dependency-aware order", 
+                       variable=self.dependency_aware_var).pack(side=tk.LEFT, padx=(20, 0))
+        
         # Progress
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding=20)
         progress_frame.pack(fill=tk.X, pady=(0, 20))
@@ -390,48 +407,655 @@ class DBMockerGUI:
             values[1] = default_rows
             self.config_tree.item(item, values=values)
     
+    def setup_advanced_tab(self):
+        """Setup advanced options tab with all CLI features."""
+        main_frame = ttk.Frame(self.advanced_frame)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="Advanced Options", 
+                               font=("Arial", 16, "bold"))
+        title_label.pack(pady=(0, 20))
+        
+        # Create scrollable frame for all options
+        canvas = tk.Canvas(main_frame)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Table Filtering Options
+        filter_frame = ttk.LabelFrame(scrollable_frame, text="Table Filtering", padding=10)
+        filter_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(filter_frame, text="Include Tables:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.include_tables_var = tk.StringVar()
+        ttk.Entry(filter_frame, textvariable=self.include_tables_var, width=50).grid(row=0, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ttk.Label(filter_frame, text="(comma-separated)").grid(row=0, column=2, sticky=tk.W, pady=5, padx=(5, 0))
+        
+        ttk.Label(filter_frame, text="Exclude Tables:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.exclude_tables_var = tk.StringVar()
+        ttk.Entry(filter_frame, textvariable=self.exclude_tables_var, width=50).grid(row=1, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ttk.Label(filter_frame, text="(comma-separated)").grid(row=1, column=2, sticky=tk.W, pady=5, padx=(5, 0))
+        
+        filter_frame.columnconfigure(1, weight=1)
+        
+        # Analysis Options
+        analysis_frame = ttk.LabelFrame(scrollable_frame, text="Schema Analysis Options", padding=10)
+        analysis_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.analyze_patterns_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(analysis_frame, text="Analyze existing data patterns", 
+                       variable=self.analyze_patterns_var).pack(anchor=tk.W, pady=2)
+        
+        self.show_specs_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(analysis_frame, text="Show detailed table specifications", 
+                       variable=self.show_specs_var).pack(anchor=tk.W, pady=2)
+        
+        # Pattern Analysis Options
+        pattern_analysis_frame = ttk.LabelFrame(scrollable_frame, text="🎯 Pattern-Based Generation", padding=10)
+        pattern_analysis_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.analyze_existing_data_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(pattern_analysis_frame, text="🔍 Analyze existing data for realistic patterns", 
+                       variable=self.analyze_existing_data_var, command=self.toggle_pattern_options).pack(anchor=tk.W, pady=2)
+        
+        ttk.Label(pattern_analysis_frame, text="Generates realistic data based on existing records in your tables", 
+                 font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
+        
+        # Pattern sample size
+        pattern_sample_frame = ttk.Frame(pattern_analysis_frame)
+        pattern_sample_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(pattern_sample_frame, text="Sample Size:").pack(side=tk.LEFT)
+        self.pattern_sample_size_var = tk.StringVar(value="1000")
+        pattern_sample_entry = ttk.Entry(pattern_sample_frame, textvariable=self.pattern_sample_size_var, width=10)
+        pattern_sample_entry.pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(pattern_sample_frame, text="records to analyze per table").pack(side=tk.LEFT)
+        
+        # Store pattern sample entry for enabling/disabling
+        self.pattern_sample_entry = pattern_sample_entry
+        
+        # Random Seed Options
+        seed_frame = ttk.LabelFrame(scrollable_frame, text="Random Seed Options", padding=10)
+        seed_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.use_seed_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(seed_frame, text="Use random seed for reproducible data", 
+                       variable=self.use_seed_var, command=self.toggle_seed_entry).pack(anchor=tk.W, pady=2)
+        
+        seed_input_frame = ttk.Frame(seed_frame)
+        seed_input_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(seed_input_frame, text="Seed Value:").pack(side=tk.LEFT)
+        self.seed_var = tk.StringVar(value="42")
+        self.seed_entry = ttk.Entry(seed_input_frame, textvariable=self.seed_var, width=20, state=tk.DISABLED)
+        self.seed_entry.pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Config File Options
+        config_frame = ttk.LabelFrame(scrollable_frame, text="Configuration File Management", padding=10)
+        config_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        config_buttons_frame = ttk.Frame(config_frame)
+        config_buttons_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(config_buttons_frame, text="📂 Load Config", 
+                  command=self.load_config_file).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(config_buttons_frame, text="💾 Save Config", 
+                  command=self.save_config_file).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(config_buttons_frame, text="🔧 Generate Template", 
+                  command=self.generate_config_template).pack(side=tk.LEFT)
+        
+        # Display config file path
+        self.config_file_var = tk.StringVar(value="No config file loaded")
+        ttk.Label(config_frame, textvariable=self.config_file_var, foreground="gray").pack(anchor=tk.W, pady=(5, 0))
+        
+        # Auto Configuration
+        auto_config_frame = ttk.LabelFrame(scrollable_frame, text="Smart Auto-Configuration", padding=10)
+        auto_config_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.auto_config_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(auto_config_frame, text="🤖 Generate optimal configuration automatically", 
+                       variable=self.auto_config_var).pack(anchor=tk.W, pady=2)
+        
+        ttk.Label(auto_config_frame, text="Auto-config analyzes your schema and creates optimal generation rules", 
+                 font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
+        
+        # Advanced Generation Options
+        advanced_gen_frame = ttk.LabelFrame(scrollable_frame, text="Advanced Generation", padding=10)
+        advanced_gen_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.show_dependency_plan_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(advanced_gen_frame, text="📋 Show dependency insertion plan", 
+                       variable=self.show_dependency_plan_var).pack(anchor=tk.W, pady=2)
+        
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Bind mousewheel to canvas
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    def toggle_seed_entry(self):
+        """Toggle seed entry based on checkbox."""
+        if self.use_seed_var.get():
+            self.seed_entry.config(state=tk.NORMAL)
+        else:
+            self.seed_entry.config(state=tk.DISABLED)
+    
+    def load_config_file(self):
+        """Load configuration from file."""
+        from tkinter import filedialog
+        
+        file_path = filedialog.askopenfilename(
+            title="Load Configuration File",
+            filetypes=[
+                ("YAML files", "*.yaml *.yml"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                import yaml
+                import json
+                from pathlib import Path
+                
+                config_file = Path(file_path)
+                
+                with open(config_file, 'r') as f:
+                    if config_file.suffix.lower() == '.json':
+                        config_data = json.load(f)
+                    else:
+                        config_data = yaml.safe_load(f)
+                
+                # Apply loaded configuration to GUI
+                self.apply_config_to_gui(config_data)
+                self.config_file_var.set(f"Loaded: {config_file.name}")
+                messagebox.showinfo("Success", f"Configuration loaded from {config_file.name}")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load configuration: {e}")
+    
+    def save_config_file(self):
+        """Save current GUI configuration to file."""
+        from tkinter import filedialog
+        
+        file_path = filedialog.asksaveasfilename(
+            title="Save Configuration File",
+            defaultextension=".yaml",
+            filetypes=[
+                ("YAML files", "*.yaml"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                config_data = self.extract_config_from_gui()
+                
+                import yaml
+                import json
+                from pathlib import Path
+                
+                config_file = Path(file_path)
+                
+                with open(config_file, 'w') as f:
+                    if config_file.suffix.lower() == '.json':
+                        json.dump(config_data, f, indent=2)
+                    else:
+                        yaml.dump(config_data, f, default_flow_style=False, indent=2)
+                
+                self.config_file_var.set(f"Saved: {config_file.name}")
+                messagebox.showinfo("Success", f"Configuration saved to {config_file.name}")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save configuration: {e}")
+    
+    def generate_config_template(self):
+        """Generate a configuration template."""
+        from tkinter import filedialog
+        
+        file_path = filedialog.asksaveasfilename(
+            title="Generate Configuration Template",
+            defaultextension=".yaml",
+            filetypes=[
+                ("YAML files", "*.yaml"),
+                ("JSON files", "*.json")
+            ]
+        )
+        
+        if file_path:
+            try:
+                import yaml
+                from pathlib import Path
+                
+                # Create template configuration
+                template = {
+                    'generation_config': {
+                        'batch_size': 1000,
+                        'seed': 42,
+                        'truncate_existing': False
+                    },
+                    'table_configs': {
+                        'example_table': {
+                            'rows_to_generate': 1000,
+                            'column_configs': {
+                                'example_column': {
+                                    'min_value': 1,
+                                    'max_value': 100,
+                                    'null_probability': 0.1
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                config_file = Path(file_path)
+                
+                with open(config_file, 'w') as f:
+                    if config_file.suffix.lower() == '.json':
+                        import json
+                        json.dump(template, f, indent=2)
+                    else:
+                        yaml.dump(template, f, default_flow_style=False, indent=2)
+                
+                messagebox.showinfo("Success", f"Configuration template created at {config_file.name}")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create template: {e}")
+    
+    def apply_config_to_gui(self, config_data):
+        """Apply configuration data to GUI elements."""
+        # Apply generation config
+        if 'generation_config' in config_data:
+            gen_config = config_data['generation_config']
+            if 'batch_size' in gen_config:
+                self.batch_size_var.set(str(gen_config['batch_size']))
+            if 'truncate_existing' in gen_config:
+                self.truncate_var.set(gen_config['truncate_existing'])
+            if 'seed' in gen_config:
+                self.seed_var.set(str(gen_config['seed']))
+                self.use_seed_var.set(True)
+                self.toggle_seed_entry()
+        
+        # Apply table configs to tree
+        table_configs = config_data.get('table_configs', config_data.get('tables', {}))
+        if table_configs and hasattr(self, 'config_tree'):
+            for item in self.config_tree.get_children():
+                values = list(self.config_tree.item(item, "values"))
+                table_name = values[0]
+                
+                if table_name in table_configs:
+                    table_config = table_configs[table_name]
+                    if 'rows_to_generate' in table_config:
+                        values[1] = table_config['rows_to_generate']
+                        self.config_tree.item(item, values=values)
+    
+    def extract_config_from_gui(self):
+        """Extract configuration from GUI elements."""
+        config = {
+            'generation_config': {
+                'batch_size': int(self.batch_size_var.get()),
+                'truncate_existing': self.truncate_var.get()
+            },
+            'table_configs': {}
+        }
+        
+        # Add seed if enabled
+        if self.use_seed_var.get():
+            try:
+                config['generation_config']['seed'] = int(self.seed_var.get())
+            except ValueError:
+                pass
+        
+        # Extract table configurations
+        if hasattr(self, 'config_tree'):
+            for item in self.config_tree.get_children():
+                values = self.config_tree.item(item, "values")
+                table_name = values[0]
+                rows_to_generate = int(values[1])
+                
+                if rows_to_generate > 0:
+                    config['table_configs'][table_name] = {
+                        'rows_to_generate': rows_to_generate
+                    }
+        
+        return config
+    
+    def build_generation_config(self):
+        """Build generation configuration from GUI settings."""
+        # Start with base config
+        config = GenerationConfig(
+            batch_size=int(self.batch_size_var.get()),
+            truncate_existing=self.truncate_var.get()
+        )
+        
+        # Add seed if enabled
+        if hasattr(self, 'use_seed_var') and self.use_seed_var.get():
+            try:
+                config.seed = int(self.seed_var.get())
+            except (ValueError, AttributeError):
+                pass
+        
+        # Add table filtering if specified
+        if hasattr(self, 'include_tables_var') and self.include_tables_var.get().strip():
+            include_tables = [t.strip() for t in self.include_tables_var.get().split(',') if t.strip()]
+            config.include_tables = include_tables
+        
+        if hasattr(self, 'exclude_tables_var') and self.exclude_tables_var.get().strip():
+            exclude_tables = [t.strip() for t in self.exclude_tables_var.get().split(',') if t.strip()]
+            config.exclude_tables = exclude_tables
+        
+        # Add pattern analysis options if available
+        if hasattr(self, 'analyze_existing_data_var'):
+            config.analyze_existing_data = self.analyze_existing_data_var.get()
+        
+        if hasattr(self, 'pattern_sample_size_var'):
+            try:
+                config.pattern_sample_size = int(self.pattern_sample_size_var.get())
+            except (ValueError, AttributeError):
+                config.pattern_sample_size = 1000
+        
+        # Extract table configurations from tree
+        if hasattr(self, 'config_tree'):
+            for item in self.config_tree.get_children():
+                values = self.config_tree.item(item, "values")
+                table_name = values[0]
+                rows_to_generate = int(values[1])
+                
+                if rows_to_generate > 0:
+                    config.table_configs[table_name] = TableGenerationConfig(
+                        rows_to_generate=rows_to_generate
+                    )
+        
+        return config
+    
     def start_generation(self):
         """Start data generation process."""
         def generation_task():
             try:
+                # Set random seed if enabled
+                if hasattr(self, 'use_seed_var') and self.use_seed_var.get():
+                    try:
+                        import random
+                        seed_value = int(self.seed_var.get())
+                        random.seed(seed_value)
+                        self.result_queue.put(("progress", f"🎲 Using random seed: {seed_value}"))
+                    except (ValueError, AttributeError):
+                        pass
+                
                 # Build generation config
                 config = self.build_generation_config()
                 
-                # Initialize generator and inserter
-                generator = DataGenerator(self.schema, config)
-                inserter = DataInserter(self.db_connection, self.schema)
+                # Step 1: Analyze database dependencies
+                if self.dependency_aware_var.get():
+                    self.result_queue.put(("progress", "🔗 Analyzing table dependencies..."))
+                    
+                    dependency_resolver = DependencyResolver(self.schema)
+                    insertion_plan = dependency_resolver.create_insertion_plan()
+                    
+                    self.result_queue.put(("progress", f"✅ Created dependency plan with {len(insertion_plan.get_insertion_batches())} batches"))
+                    
+                    # Show dependency plan if requested
+                    if hasattr(self, 'show_dependency_plan_var') and self.show_dependency_plan_var.get():
+                        batches = insertion_plan.get_insertion_batches()
+                        plan_text = f"\n📋 DEPENDENCY INSERTION PLAN:\n"
+                        for i, batch in enumerate(batches, 1):
+                            plan_text += f"  Batch {i}: {', '.join(batch)}\n"
+                        self.result_queue.put(("progress", plan_text))
+                else:
+                    insertion_plan = None
                 
-                # Process each table
-                total_generated = 0
-                total_inserted = 0
+                # Step 2: Check if specification-driven generation is enabled
+                if self.spec_driven_var.get():
+                    # Analyze database specifications using DESCRIBE
+                    self.result_queue.put(("progress", "🔍 Analyzing database specifications using DESCRIBE..."))
+                    
+                    spec_analyzer = DatabaseSpecAnalyzer(self.db_connection)
+                    
+                    # Use same table filtering as schema analysis
+                    include_tables = None
+                    exclude_tables = None
+                    
+                    if hasattr(self, 'include_tables_var') and self.include_tables_var.get().strip():
+                        include_tables = [t.strip() for t in self.include_tables_var.get().split(',') if t.strip()]
+                    
+                    if hasattr(self, 'exclude_tables_var') and self.exclude_tables_var.get().strip():
+                        exclude_tables = [t.strip() for t in self.exclude_tables_var.get().split(',') if t.strip()]
+                    
+                    # Also limit to tables that exist in schema
+                    schema_table_names = [table.name for table in self.schema.tables]
+                    if include_tables:
+                        include_tables = [t for t in include_tables if t in schema_table_names]
+                    else:
+                        include_tables = schema_table_names
+                    
+                    table_specs = spec_analyzer.analyze_all_tables(
+                        include_tables=include_tables,
+                        exclude_tables=exclude_tables
+                    )
+                    
+                    if not table_specs:
+                        self.result_queue.put(("error", "Failed to analyze database specifications"))
+                        return
+                    
+                    self.result_queue.put(("progress", f"✅ Analyzed {len(table_specs)} tables with exact specifications"))
+                    
+                    # Show table specifications if requested
+                    if hasattr(self, 'show_specs_var') and self.show_specs_var.get():
+                        specs_text = f"\n🔍 TABLE SPECIFICATIONS SUMMARY:\n"
+                        for table_name, spec in list(table_specs.items())[:5]:  # Show first 5 tables
+                            specs_text += f"\n📋 {table_name.upper()}:\n"
+                            for col in spec.columns[:3]:  # Show first 3 columns
+                                specs_text += f"  • {col.name}: {col.data_type}"
+                                if col.max_length:
+                                    specs_text += f"({col.max_length})"
+                                if not col.is_nullable:
+                                    specs_text += " NOT NULL"
+                                if col.is_primary_key:
+                                    specs_text += " PRIMARY KEY"
+                                specs_text += "\n"
+                            if len(spec.columns) > 3:
+                                specs_text += f"  ... and {len(spec.columns) - 3} more columns\n"
+                        if len(table_specs) > 5:
+                            specs_text += f"\n... and {len(table_specs) - 5} more tables\n"
+                        self.result_queue.put(("progress", specs_text))
+                    
+                    # Create specification-driven generator
+                    spec_generator = SpecificationDrivenGenerator(self.db_connection, table_specs)
+                else:
+                    # Use legacy generator
+                    generator = DataGenerator(self.schema, config)
+                    table_specs = None
+                    spec_generator = None
+                
+                # Apply auto-configuration if enabled
+                if hasattr(self, 'auto_config_var') and self.auto_config_var.get():
+                    self.result_queue.put(("progress", "🤖 Generating optimal configuration automatically..."))
+                    
+                    try:
+                        from dbmocker.core.smart_generator import create_optimal_generation_config
+                        auto_config = create_optimal_generation_config(self.schema, self.db_connection, 10)
+                        
+                        # Merge auto-config with existing config
+                        if auto_config.table_configs:
+                            for table_name, table_config in auto_config.table_configs.items():
+                                config.table_configs[table_name] = table_config
+                            
+                            self.result_queue.put(("progress", f"✅ Auto-configuration applied to {len(auto_config.table_configs)} tables"))
+                    except Exception as e:
+                        self.result_queue.put(("progress", f"⚠️ Auto-configuration failed: {e}"))
+                
+                # Create inserter based on mode
+                if self.spec_driven_var.get() and table_specs:
+                    # Create enhanced schema for inserter compatibility
+                    from dbmocker.core.models import DatabaseSchema, TableInfo, ColumnInfo
+                    
+                    # Start with original schema tables
+                    enhanced_tables = list(self.schema.tables)
+                    existing_table_names = {table.name for table in enhanced_tables}
+                    
+                    # Add any new tables found by spec analyzer but not in original schema
+                    for table_name, spec in table_specs.items():
+                        if table_name not in existing_table_names:
+                            mock_columns = []
+                            for col_spec in spec.columns:
+                                mock_columns.append(ColumnInfo(
+                                    name=col_spec.name,
+                                    data_type=col_spec.base_type.value,
+                                    max_length=col_spec.max_length,
+                                    is_nullable=col_spec.is_nullable,
+                                    is_auto_increment=col_spec.is_auto_increment
+                                ))
+                            
+                            mock_table = TableInfo(
+                                name=table_name,
+                                columns=mock_columns,
+                                row_count=spec.row_count
+                            )
+                            enhanced_tables.append(mock_table)
+                            logger.info(f"Added missing table {table_name} to enhanced schema")
+                    
+                    enhanced_schema = DatabaseSchema(
+                        database_name=self.db_connection.config.database,
+                        tables=enhanced_tables
+                    )
+                    
+                    inserter = DataInserter(self.db_connection, enhanced_schema)
+                else:
+                    # Use legacy mode
+                    inserter = DataInserter(self.db_connection, self.schema)
+                
+                # Collect table configurations from GUI and validate against schema
+                table_configs = {}
+                schema_table_names = {table.name for table in self.schema.tables}
+                skipped_tables = []
                 
                 for item in self.config_tree.get_children():
                     values = self.config_tree.item(item, "values")
                     table_name = values[0]
                     rows_to_generate = int(values[1])
                     
-                    if rows_to_generate <= 0:
-                        continue
+                    if rows_to_generate > 0:
+                        # Only include tables that exist in schema
+                        if table_name in schema_table_names:
+                            table_configs[table_name] = rows_to_generate
+                        else:
+                            skipped_tables.append(table_name)
+                            self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in current schema analysis"))
+                
+                if skipped_tables:
+                    self.result_queue.put(("progress", f"📋 Skipped {len(skipped_tables)} tables not in schema: {', '.join(skipped_tables)}"))
+                
+                if not table_configs:
+                    self.result_queue.put(("error", "No valid tables selected for generation"))
+                    return
+                
+                self.result_queue.put(("progress", f"📊 Processing {len(table_configs)} valid tables: {', '.join(table_configs.keys())}"))
+                
+                # If we skipped tables, refresh config tree to remove them
+                if skipped_tables:
+                    self.result_queue.put(("refresh_config", self.schema))
+                
+                # Determine processing order
+                if self.dependency_aware_var.get() and insertion_plan:
+                    # Use dependency-aware batched processing
+                    batches = insertion_plan.get_insertion_batches()
+                    self.result_queue.put(("progress", f"📦 Processing {len(table_configs)} tables in {len(batches)} dependency batches"))
                     
-                    self.result_queue.put(("progress", f"Generating data for {table_name}..."))
+                    processing_order = []
+                    for batch_num, batch in enumerate(batches, 1):
+                        batch_tables = [table for table in batch if table in table_configs]
+                        if batch_tables:
+                            processing_order.append((f"Batch {batch_num}", batch_tables))
+                else:
+                    # Use GUI order (legacy mode)
+                    gui_order = [item[0] for item in [(self.config_tree.item(item, "values")[0], 
+                                                     int(self.config_tree.item(item, "values")[1])) 
+                                                    for item in self.config_tree.get_children()] 
+                               if item[1] > 0 and item[0] in table_configs]
+                    processing_order = [("GUI Order", gui_order)]
                     
-                    # Generate data
-                    data = generator.generate_data_for_table(table_name, rows_to_generate)
-                    total_generated += len(data)
+                # Process tables
+                total_generated = 0
+                total_inserted = 0
+                
+                for batch_name, table_list in processing_order:
+                    if len(processing_order) > 1:
+                        self.result_queue.put(("progress", f"📦 Starting {batch_name} ({len(table_list)} tables)"))
                     
-                    # Insert data (if not dry run)
-                    if not self.dry_run_var.get():
-                        if self.truncate_var.get():
-                            inserter.truncate_table(table_name)
+                    for table_name in table_list:
+                        rows_to_generate = table_configs[table_name]
                         
-                        stats = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
-                        total_inserted += stats.total_rows_generated
-                    
-                    self.result_queue.put(("table_complete", {
-                        'table': table_name,
-                        'generated': len(data),
-                        'inserted': len(data) if not self.dry_run_var.get() else 0
-                    }))
+                        if self.spec_driven_var.get() and table_specs:
+                            # Specification-driven mode
+                            if table_name not in table_specs:
+                                self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in specification analysis"))
+                                continue
+                                
+                            table_spec = table_specs[table_name]
+                            
+                            self.result_queue.put(("progress", f"⚡ Generating {rows_to_generate} rows for {table_name} using exact specifications..."))
+                            
+                            # Generate data using specification-driven approach
+                            data = spec_generator._generate_table_data(table_spec, rows_to_generate)
+                            total_generated += len(data)
+                            
+                            # Insert data (if not dry run)
+                            if not self.dry_run_var.get():
+                                if self.truncate_var.get():
+                                    inserter.truncate_table(table_name)
+                                
+                                # Insert data using table name (not mock table object)
+                                rows_inserted = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
+                                total_inserted += rows_inserted.total_rows_generated
+                            
+                            self.result_queue.put(("table_complete", {
+                                'table': table_name,
+                                'generated': len(data),
+                                'inserted': len(data) if not self.dry_run_var.get() else 0,
+                                'spec_driven': True,
+                                'batch': batch_name
+                            }))
+                        else:
+                            # Legacy mode - verify table exists in schema
+                            schema_table_names = {table.name for table in self.schema.tables}
+                            if table_name not in schema_table_names:
+                                self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in schema analysis"))
+                                continue
+                            
+                            self.result_queue.put(("progress", f"Generating data for {table_name}..."))
+                            
+                            # Generate data using legacy approach
+                            data = generator.generate_data_for_table(table_name, rows_to_generate)
+                            total_generated += len(data)
+                            
+                            # Insert data (if not dry run)
+                            if not self.dry_run_var.get():
+                                if self.truncate_var.get():
+                                    inserter.truncate_table(table_name)
+                                
+                                stats = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
+                                total_inserted += stats.total_rows_generated
+                            
+                            self.result_queue.put(("table_complete", {
+                                'table': table_name,
+                                'generated': len(data),
+                                'inserted': len(data) if not self.dry_run_var.get() else 0,
+                                'spec_driven': False,
+                                'batch': batch_name
+                            }))
                 
                 # Verify integrity if requested
                 if self.verify_var.get() and not self.dry_run_var.get():
@@ -441,7 +1065,12 @@ class DBMockerGUI:
                 
                 self.result_queue.put(("generation_complete", {
                     'total_generated': total_generated,
-                    'total_inserted': total_inserted
+                    'total_inserted': total_inserted,
+                    'spec_driven': self.spec_driven_var.get(),
+                    'dependency_aware': self.dependency_aware_var.get(),
+                    'tables_analyzed': len(table_specs) if table_specs else 0,
+                    'dependency_batches': len(insertion_plan.get_insertion_batches()) if insertion_plan else 0,
+                    'tables_processed': len(table_configs)
                 }))
                 
             except Exception as e:
@@ -508,6 +1137,11 @@ class DBMockerGUI:
                 f.write(self.log_text.get(1.0, tk.END))
             messagebox.showinfo("Success", f"Logs saved to {filename}")
     
+    def toggle_pattern_options(self):
+        """Toggle pattern analysis options based on checkbox state."""
+        state = tk.NORMAL if self.analyze_existing_data_var.get() else tk.DISABLED
+        self.pattern_sample_entry.config(state=state)
+    
     def process_results(self):
         """Process results from background tasks."""
         try:
@@ -543,6 +1177,11 @@ class DBMockerGUI:
                     else:
                         message = f"\n✅ Data integrity verified\n"
                     self.append_to_results(message)
+                
+                elif result_type == "refresh_config":
+                    # Refresh configuration tab with current schema
+                    self.populate_config_tab(data)
+                    self.append_to_results("🔄 Configuration refreshed to match current schema\n")
                 
                 elif result_type == "error":
                     self.analyze_button.config(state=tk.NORMAL, text="Connect & Analyze Schema")

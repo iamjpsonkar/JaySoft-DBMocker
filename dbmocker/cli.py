@@ -14,6 +14,10 @@ from dbmocker.core.analyzer import SchemaAnalyzer
 from dbmocker.core.generator import DataGenerator
 from dbmocker.core.inserter import DataInserter
 from dbmocker.core.models import GenerationConfig, TableGenerationConfig
+from dbmocker.core.dependency_resolver import DependencyResolver, print_insertion_plan
+from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optimal_generation_config
+from dbmocker.core.db_spec_analyzer import DatabaseSpecAnalyzer, print_table_specs
+from dbmocker.core.spec_driven_generator import SpecificationDrivenGenerator
 
 
 # Configure logging
@@ -48,9 +52,14 @@ def cli(verbose: bool, quiet: bool):
 @click.option('--exclude-tables', help='Comma-separated list of tables to exclude')
 @click.option('--analyze-patterns/--no-analyze-patterns', default=True,
               help='Analyze existing data patterns')
+@click.option('--analyze-existing-data/--no-analyze-existing-data', default=False,
+              help='Analyze existing data in tables for realistic generation patterns')
+@click.option('--pattern-sample-size', default=1000, type=int,
+              help='Sample size for existing data pattern analysis')
 def analyze(host: str, port: int, database: str, username: str, password: str,
            driver: str, output: Optional[str], include_tables: Optional[str],
-           exclude_tables: Optional[str], analyze_patterns: bool):
+           exclude_tables: Optional[str], analyze_patterns: bool,
+           analyze_existing_data: bool, pattern_sample_size: int):
     """Analyze database schema and existing data patterns."""
     try:
         # Parse table lists
@@ -75,7 +84,9 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
             schema = analyzer.analyze_schema(
                 include_tables=include_list,
                 exclude_tables=exclude_list,
-                analyze_data_patterns=analyze_patterns
+                analyze_data_patterns=analyze_patterns,
+                analyze_existing_data=analyze_existing_data,
+                pattern_sample_size=pattern_sample_size
             )
             
             # Display summary
@@ -88,8 +99,21 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
             for table in schema.tables:
                 fk_count = len(table.foreign_keys)
                 fk_text = f" ({fk_count} FKs)" if fk_count > 0 else ""
+                pattern_text = ""
+                if hasattr(schema, 'table_patterns') and schema.table_patterns and table.name in schema.table_patterns:
+                    pattern_info = schema.table_patterns[table.name]
+                    pattern_text = f" [📊 {pattern_info.total_records} samples analyzed]"
                 click.echo(f"  • {table.name}: {table.row_count:,} rows, "
-                          f"{len(table.columns)} columns{fk_text}")
+                          f"{len(table.columns)} columns{fk_text}{pattern_text}")
+            
+            # Display pattern analysis summary if performed
+            if hasattr(schema, 'table_patterns') and schema.table_patterns:
+                click.echo(f"\n🎯 Pattern Analysis Summary:")
+                click.echo(f"  Tables with pattern analysis: {len(schema.table_patterns)}")
+                total_samples = sum(p.total_records for p in schema.table_patterns.values())
+                click.echo(f"  Total samples analyzed: {total_samples:,}")
+                click.echo(f"  Sample size per table: {pattern_sample_size}")
+                click.echo(f"  🚀 Realistic data generation enabled for these tables!")
             
             # Save to file if requested
             if output:
@@ -158,10 +182,15 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
 @click.option('--seed', type=int, help='Random seed for reproducible generation')
 @click.option('--dry-run', is_flag=True, help='Generate data but do not insert into database')
 @click.option('--verify/--no-verify', default=True, help='Verify data integrity after insertion')
+@click.option('--analyze-existing-data/--no-analyze-existing-data', default=False,
+              help='Analyze existing data for realistic generation patterns')
+@click.option('--pattern-sample-size', default=1000, type=int,
+              help='Sample size for existing data pattern analysis')
 def generate(host: str, port: int, database: str, username: str, password: str,
             driver: str, config: Optional[str], rows: int, batch_size: int,
             include_tables: Optional[str], exclude_tables: Optional[str],
-            truncate: bool, seed: Optional[int], dry_run: bool, verify: bool):
+            truncate: bool, seed: Optional[int], dry_run: bool, verify: bool,
+            analyze_existing_data: bool, pattern_sample_size: int):
     """Generate and insert mock data into database."""
     try:
         # Parse table lists
@@ -180,8 +209,21 @@ def generate(host: str, port: int, database: str, username: str, password: str,
         if config:
             config_data = load_config_file(config)
             # Override with config file settings
-            for table_name, table_config in config_data.get('tables', {}).items():
-                generation_config.table_configs[table_name] = TableGenerationConfig(**table_config)
+            if 'table_configs' in config_data:
+                for table_name, table_config in config_data['table_configs'].items():
+                    generation_config.table_configs[table_name] = TableGenerationConfig(**table_config)
+            elif 'tables' in config_data:
+                # Support legacy format
+                for table_name, table_config in config_data['tables'].items():
+                    generation_config.table_configs[table_name] = TableGenerationConfig(**table_config)
+            
+            # Override global generation config if present
+            if 'generation_config' in config_data:
+                global_config = config_data['generation_config']
+                if 'batch_size' in global_config:
+                    generation_config.batch_size = global_config['batch_size']
+                if 'rows_to_generate' in global_config:
+                    rows = global_config['rows_to_generate']
         
         # Create database configuration
         db_config = DatabaseConfig(
@@ -201,11 +243,13 @@ def generate(host: str, port: int, database: str, username: str, password: str,
             schema = analyzer.analyze_schema(
                 include_tables=include_list,
                 exclude_tables=exclude_list,
-                analyze_data_patterns=True
+                analyze_data_patterns=True,
+                analyze_existing_data=analyze_existing_data,
+                pattern_sample_size=pattern_sample_size
             )
             
             # Initialize components
-            generator = DataGenerator(schema, generation_config)
+            generator = DataGenerator(schema, generation_config, db_conn)
             inserter = DataInserter(db_conn, schema)
             
             # Sort tables by dependencies
@@ -388,6 +432,16 @@ def gui():
         sys.exit(1)
 
 
+def get_default_port(driver: str) -> int:
+    """Get default port for database driver."""
+    defaults = {
+        'mysql': 3306,
+        'postgresql': 5432,
+        'sqlite': 0
+    }
+    return defaults.get(driver, 0)
+
+
 def load_config_file(config_path: str) -> Dict[str, Any]:
     """Load configuration from JSON or YAML file."""
     config_file = Path(config_path)
@@ -400,6 +454,356 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
             return json.load(f)
         else:
             return yaml.safe_load(f)
+
+
+@cli.command()
+@click.option('--driver', required=True, type=click.Choice(['mysql', 'postgresql', 'sqlite']),
+              help='Database driver')
+@click.option('--host', default='localhost', help='Database host')  
+@click.option('--port', type=int, help='Database port')
+@click.option('--database', required=True, help='Database name')
+@click.option('--username', help='Database username')
+@click.option('--password', help='Database password')
+@click.option('--rows', default=10, help='Number of rows to generate per table')
+@click.option('--batch-size', default=1000, help='Batch size for inserts')
+@click.option('--config', type=click.Path(exists=True), help='Configuration file path')
+@click.option('--truncate', is_flag=True, help='Truncate tables before inserting')
+@click.option('--dry-run', is_flag=True, help='Show what would be generated without inserting')
+@click.option('--verify', is_flag=True, help='Verify data integrity after insertion')
+@click.option('--seed', type=int, help='Random seed for reproducible data')
+@click.option('--show-plan', is_flag=True, help='Show dependency-aware insertion plan')
+@click.option('--auto-config', is_flag=True, help='Generate optimal configuration automatically')
+def smart_generate(driver, host, port, database, username, password, rows, batch_size, 
+                  config, truncate, dry_run, verify, seed, show_plan, auto_config):
+    """🧠 Smart dependency-aware data generation with optimal FK handling."""
+    
+    start_time = time.time()
+    
+    try:
+        # Set random seed
+        if seed is not None:
+            import random
+            random.seed(seed)
+            click.echo(f"🎲 Using random seed: {seed}")
+        
+        # Create database configuration
+        db_config = DatabaseConfig(
+            host=host,
+            port=port or get_default_port(driver),
+            database=database,
+            username=username,
+            password=password or '',
+            driver=driver
+        )
+        
+        # Connect to database
+        click.echo(f"🔌 Connecting to {driver} database at {host}...")
+        db_conn = DatabaseConnection(db_config)
+        db_conn.connect()
+        
+        # Analyze schema
+        click.echo("🔍 Analyzing database schema...")
+        analyzer = SchemaAnalyzer(db_conn)
+        schema = analyzer.analyze_schema()
+        
+        # Create dependency resolver
+        resolver = DependencyResolver(schema)
+        insertion_plan = resolver.create_insertion_plan()
+        
+        # Show insertion plan if requested
+        if show_plan:
+            print_insertion_plan(insertion_plan, f"{database} Smart Insertion Plan")
+            if not dry_run:
+                click.echo("\n" + "="*50)
+        
+        # Load or create generation configuration
+        if config:
+            config_data = load_config_file(config)
+            generation_config = GenerationConfig(**config_data.get('generation_config', {}))
+            
+            # Override with config file settings
+            if 'table_configs' in config_data:
+                for table_name, table_config in config_data['table_configs'].items():
+                    generation_config.table_configs[table_name] = TableGenerationConfig(**table_config)
+            elif 'tables' in config_data:
+                # Support legacy format
+                for table_name, table_config in config_data['tables'].items():
+                    generation_config.table_configs[table_name] = TableGenerationConfig(**table_config)
+        
+        elif auto_config:
+            click.echo("🤖 Generating optimal configuration...")
+            generation_config = create_optimal_generation_config(schema, db_conn, rows)
+            click.echo("✅ Auto-configuration created!")
+        
+        else:
+            generation_config = GenerationConfig(
+                batch_size=batch_size,
+                truncate_existing=truncate,
+                preserve_existing_data=True,
+                reuse_existing_values=0.8  # High reuse for FK values
+            )
+        
+        # Create smart generator
+        smart_generator = DependencyAwareGenerator(schema, generation_config, db_conn)
+        
+        # Show generation plan
+        batches = insertion_plan.get_insertion_batches()
+        total_tables = len([t for batch in batches for t in batch])
+        
+        click.echo(f"\n🎯 Smart Generation Plan:")
+        click.echo(f"  Tables to process: {total_tables}")
+        click.echo(f"  Dependency batches: {len(batches)}")
+        click.echo(f"  Rows per table: {rows}")
+        click.echo(f"  Smart FK resolution: Enabled")
+        
+        if dry_run:
+            click.echo(f"\n🔍 DRY RUN - No data will be inserted")
+            
+            # Show batch details
+            for i, batch in enumerate(batches, 1):
+                click.echo(f"\nBatch {i}: {', '.join(batch)}")
+                for table_name in batch:
+                    suggestions = resolver.suggest_fk_value_sources(table_name)
+                    if suggestions:
+                        click.echo(f"  {table_name} FK dependencies:")
+                        for fk_col, info in suggestions.items():
+                            click.echo(f"    • {fk_col} -> {info['source_table']}.{info['source_column']}")
+            return
+        
+        # Confirm before proceeding
+        if not click.confirm(f"\nProceed with smart data generation?"):
+            click.echo("❌ Generation cancelled")
+            return
+        
+        # Generate data for all tables in dependency order
+        click.echo("\n🚀 Starting smart generation...")
+        all_data = smart_generator.generate_data_for_all_tables(rows)
+        
+        # Insert data using standard inserter
+        inserter = DataInserter(db_conn, schema)
+        total_inserted = 0
+        
+        click.echo("\n💾 Inserting generated data...")
+        for batch_num, batch in enumerate(batches, 1):
+            click.echo(f"\n📦 Processing batch {batch_num}/{len(batches)}")
+            
+            for table_name in batch:
+                if table_name in all_data and all_data[table_name]:
+                    table = next((t for t in schema.tables if t.name == table_name), None)
+                    if table:
+                        rows_inserted = inserter.insert_data(table, all_data[table_name], batch_size)
+                        total_inserted += rows_inserted
+                        click.echo(f"  ✅ {table_name}: {rows_inserted} rows inserted")
+        
+        # Verify data integrity if requested
+        if verify:
+            click.echo("\n🔍 Verifying data integrity...")
+            inserter.verify_data_integrity()
+            click.echo("  ✅ Data integrity verified")
+        
+        elapsed_time = time.time() - start_time
+        click.echo(f"\n🎉 Smart generation completed successfully!")
+        click.echo(f"📊 Summary:")
+        click.echo(f"  Total rows inserted: {total_inserted:,}")
+        click.echo(f"  Tables processed: {total_tables}")
+        click.echo(f"  Time: {elapsed_time:.2f}s")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        raise click.ClickException(str(e))
+    
+    finally:
+        if 'db_conn' in locals():
+            db_conn.close()
+
+
+@cli.command()
+@click.option('--driver', required=True, type=click.Choice(['mysql', 'postgresql', 'sqlite']),
+              help='Database driver')
+@click.option('--host', default='localhost', help='Database host')  
+@click.option('--port', type=int, help='Database port')
+@click.option('--database', required=True, help='Database name')
+@click.option('--username', help='Database username')
+@click.option('--password', help='Database password')
+@click.option('--rows', default=10, help='Number of rows to generate per table')
+@click.option('--batch-size', default=1000, help='Batch size for inserts')
+@click.option('--dry-run', is_flag=True, help='Show what would be generated without inserting')
+@click.option('--verify', is_flag=True, help='Verify data integrity after insertion')
+@click.option('--seed', type=int, help='Random seed for reproducible data')
+@click.option('--show-specs', is_flag=True, help='Show detailed table specifications')
+@click.option('--max-tables-shown', default=5, help='Maximum tables to show in spec display')
+def spec_generate(driver, host, port, database, username, password, rows, batch_size, 
+                 dry_run, verify, seed, show_specs, max_tables_shown):
+    """🔍 Advanced specification-driven data generation using DESCRIBE analysis."""
+    
+    start_time = time.time()
+    
+    try:
+        # Set random seed
+        if seed is not None:
+            import random
+            random.seed(seed)
+            click.echo(f"🎲 Using random seed: {seed}")
+        
+        # Create database configuration
+        db_config = DatabaseConfig(
+            host=host,
+            port=port or get_default_port(driver),
+            database=database,
+            username=username,
+            password=password or '',
+            driver=driver
+        )
+        
+        # Connect to database
+        click.echo(f"🔌 Connecting to {driver} database at {host}...")
+        db_conn = DatabaseConnection(db_config)
+        db_conn.connect()
+        
+        # Analyze database specifications using DESCRIBE
+        click.echo("🔍 Analyzing database specifications using DESCRIBE...")
+        spec_analyzer = DatabaseSpecAnalyzer(db_conn)
+        table_specs = spec_analyzer.analyze_all_tables()
+        
+        click.echo(f"✅ Analyzed {len(table_specs)} tables with exact specifications")
+        
+        # Show table specifications if requested
+        if show_specs:
+            print_table_specs(table_specs, max_tables_shown)
+            if not dry_run:
+                click.echo("\n" + "="*50)
+        
+        # Create specification-driven generator
+        spec_generator = SpecificationDrivenGenerator(db_conn, table_specs)
+        insertion_plan = spec_generator.insertion_plan
+        
+        # Show generation plan
+        batches = insertion_plan.get_insertion_batches()
+        total_tables = len(table_specs)
+        
+        click.echo(f"\n🎯 Specification-Driven Generation Plan:")
+        click.echo(f"  Tables to process: {total_tables}")
+        click.echo(f"  Dependency batches: {len(batches)}")
+        click.echo(f"  Rows per table: {rows}")
+        click.echo(f"  Exact type compliance: Enabled")
+        click.echo(f"  Smart constraint handling: Enabled")
+        
+        if dry_run:
+            click.echo(f"\n🔍 DRY RUN - No data will be inserted")
+            
+            # Show specification summary
+            click.echo(f"\n📋 TABLE SPECIFICATIONS SUMMARY:")
+            for table_name, spec in list(table_specs.items())[:5]:
+                click.echo(f"\n  {table_name.upper()}:")
+                click.echo(f"    Columns: {len(spec.columns)}")
+                click.echo(f"    Primary Keys: {', '.join(spec.primary_keys) or 'None'}")
+                click.echo(f"    Foreign Keys: {len(spec.foreign_keys)}")
+                click.echo(f"    Check Constraints: {len(spec.check_constraints)}")
+                click.echo(f"    Current Rows: {spec.row_count:,}")
+                
+                # Show some column details
+                for col in spec.columns[:3]:
+                    constraints = []
+                    if col.is_primary_key:
+                        constraints.append("PK")
+                    if col.is_unique:
+                        constraints.append("UNIQUE")
+                    if not col.is_nullable:
+                        constraints.append("NOT NULL")
+                    if col.is_auto_increment:
+                        constraints.append("AUTO_INC")
+                    
+                    constraint_str = f" ({', '.join(constraints)})" if constraints else ""
+                    
+                    if col.max_length:
+                        type_info = f"{col.data_type}({col.max_length})"
+                    elif col.precision:
+                        type_info = f"{col.data_type}({col.precision},{col.scale or 0})"
+                    else:
+                        type_info = col.data_type
+                    
+                    click.echo(f"      • {col.name}: {type_info}{constraint_str}")
+            
+            if len(table_specs) > 5:
+                click.echo(f"\n    ... and {len(table_specs) - 5} more tables")
+            
+            return
+        
+        # Confirm before proceeding
+        if not click.confirm(f"\nProceed with specification-driven generation?"):
+            click.echo("❌ Generation cancelled")
+            return
+        
+        # Generate data using exact specifications
+        click.echo("\n🚀 Starting specification-driven generation...")
+        all_data = spec_generator.generate_data_for_all_tables(rows)
+        
+        # Insert data using standard inserter (we need to create a mock schema for this)
+        from dbmocker.core.models import DatabaseSchema, TableInfo, ColumnInfo
+        
+        # Create mock schema for inserter
+        mock_tables = []
+        for table_name, spec in table_specs.items():
+            mock_columns = []
+            for col_spec in spec.columns:
+                # Convert spec to ColumnInfo (simplified)
+                mock_columns.append(ColumnInfo(
+                    name=col_spec.name,
+                    data_type=col_spec.base_type.value,  # Use enum value
+                    max_length=col_spec.max_length,
+                    is_nullable=col_spec.is_nullable,
+                    is_auto_increment=col_spec.is_auto_increment
+                ))
+            
+            mock_table = TableInfo(
+                name=table_name,
+                columns=mock_columns,
+                row_count=spec.row_count
+            )
+            mock_tables.append(mock_table)
+        
+        mock_schema = DatabaseSchema(
+            database_name=database,
+            tables=mock_tables
+        )
+        
+        inserter = DataInserter(db_conn, mock_schema)
+        total_inserted = 0
+        
+        click.echo("\n💾 Inserting generated data...")
+        for batch_num, batch in enumerate(batches, 1):
+            click.echo(f"\n📦 Processing batch {batch_num}/{len(batches)}")
+            
+            for table_name in batch:
+                if table_name in all_data and all_data[table_name]:
+                    # Find the mock table
+                    mock_table = next((t for t in mock_tables if t.name == table_name), None)
+                    if mock_table:
+                        rows_inserted = inserter.insert_data(mock_table, all_data[table_name], batch_size)
+                        total_inserted += rows_inserted
+                        click.echo(f"  ✅ {table_name}: {rows_inserted} rows inserted")
+        
+        # Verify data integrity if requested
+        if verify:
+            click.echo("\n🔍 Verifying data integrity...")
+            inserter.verify_data_integrity()
+            click.echo("  ✅ Data integrity verified")
+        
+        elapsed_time = time.time() - start_time
+        click.echo(f"\n🎉 Specification-driven generation completed successfully!")
+        click.echo(f"📊 Summary:")
+        click.echo(f"  Total rows inserted: {total_inserted:,}")
+        click.echo(f"  Tables processed: {total_tables}")
+        click.echo(f"  Exact specifications used: {len(table_specs)}")
+        click.echo(f"  Time: {elapsed_time:.2f}s")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        raise click.ClickException(str(e))
+    
+    finally:
+        if 'db_conn' in locals():
+            db_conn.close()
 
 
 def main():
