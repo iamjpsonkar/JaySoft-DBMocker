@@ -213,6 +213,20 @@ class GenerationConfig(BaseModel):
     pattern_sample_size: int = Field(
         default=1000, description="Sample size for existing data pattern analysis"
     )
+    
+    # Advanced generation options (GUI ENHANCEMENTS)
+    generation_mode: str = Field(
+        default="standard", description="Generation mode: standard, smart, or spec"
+    )
+    show_dependency_plan: bool = Field(
+        default=False, description="Show dependency insertion plan"
+    )
+    show_table_specs: bool = Field(
+        default=False, description="Show detailed table specifications"
+    )
+    max_tables_shown: int = Field(
+        default=5, description="Maximum tables to show in specification display"
+    )
 
 
 class TableGenerationConfig(BaseModel):

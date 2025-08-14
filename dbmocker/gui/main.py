@@ -5,6 +5,8 @@ from tkinter import ttk, messagebox, filedialog, scrolledtext
 import threading
 import queue
 import logging
+import platform
+import sys
 from typing import Optional, Dict, Any
 import json
 
@@ -19,6 +21,57 @@ from dbmocker.core.dependency_resolver import DependencyResolver, print_insertio
 from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optimal_generation_config
 
 
+class ToolTip:
+    """Cross-platform tooltip implementation for GUI elements."""
+    
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.on_enter)
+        self.widget.bind("<Leave>", self.on_leave)
+        
+        # Cross-platform event handling
+        if platform.system() == "Darwin":  # macOS
+            self.widget.bind("<Button-2>", self.show_tooltip)  # Right click on macOS
+        else:  # Windows/Linux
+            self.widget.bind("<Button-3>", self.show_tooltip)  # Right click
+    
+    def on_enter(self, event=None):
+        """Show tooltip on mouse enter (with delay)."""
+        self.widget.after(1000, self.show_tooltip)
+    
+    def on_leave(self, event=None):
+        """Hide tooltip on mouse leave."""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+    
+    def show_tooltip(self, event=None):
+        """Display the tooltip."""
+        if self.tooltip_window or not self.text:
+            return
+            
+        x = self.widget.winfo_rootx() + 25
+        y = self.widget.winfo_rooty() + 25
+        
+        self.tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        
+        # Cross-platform styling
+        if platform.system() == "Darwin":  # macOS
+            tw.configure(bg="systemWindowBackgroundColor")
+        else:  # Windows/Linux
+            tw.configure(bg="#ffffe0")
+        
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                        background="#ffffe0" if platform.system() != "Darwin" else "systemWindowBackgroundColor",
+                        relief=tk.SOLID, borderwidth=1,
+                        font=("Arial", "9", "normal"))
+        label.pack(ipadx=1)
+
+
 class DBMockerGUI:
     """Main GUI application for JaySoft:DBMocker."""
     
@@ -26,7 +79,12 @@ class DBMockerGUI:
         """Initialize the GUI application."""
         self.root = root
         self.root.title("JaySoft:DBMocker - Database Mock Data Generator")
-        self.root.geometry("1000x700")
+        
+        # Cross-platform window configuration
+        self.configure_cross_platform_window()
+        
+        # Set application icon if available
+        self.set_application_icon()
         
         # Application state
         self.db_connection: Optional[DatabaseConnection] = None
@@ -43,6 +101,50 @@ class DBMockerGUI:
         
         # Start result processing
         self.process_results()
+    
+    def configure_cross_platform_window(self):
+        """Configure window for cross-platform compatibility."""
+        system = platform.system()
+        
+        if system == "Darwin":  # macOS
+            self.root.geometry("1100x750")
+            # Enable native macOS window controls
+            self.root.tk.call('tk', 'scaling', 1.0)
+            # Set minimum size
+            self.root.minsize(900, 600)
+        elif system == "Windows":  # Windows
+            self.root.geometry("1000x700")
+            self.root.state('zoomed')  # Start maximized on Windows
+            self.root.minsize(800, 600)
+        else:  # Linux
+            self.root.geometry("1000x700")
+            self.root.minsize(800, 600)
+            # Try to maximize on Linux
+            try:
+                self.root.state('zoomed')
+            except tk.TclError:
+                pass  # Fallback if zoomed not supported
+    
+    def set_application_icon(self):
+        """Set application icon for different platforms."""
+        try:
+            system = platform.system()
+            if system == "Windows":
+                # Windows .ico format
+                try:
+                    self.root.iconbitmap('icon.ico')
+                except tk.TclError:
+                    pass  # Icon file not found, continue without icon
+            elif system == "Linux":
+                # Linux .png format
+                try:
+                    icon = tk.PhotoImage(file='icon.png')
+                    self.root.iconphoto(True, icon)
+                except tk.TclError:
+                    pass  # Icon file not found, continue without icon
+            # macOS doesn't typically use custom icons in Tkinter
+        except Exception:
+            pass  # Continue without icon if any error occurs
     
     def setup_gui(self):
         """Setup the GUI layout."""
@@ -100,31 +202,42 @@ class DBMockerGUI:
         driver_combo = ttk.Combobox(form_frame, textvariable=self.driver_var, 
                                    values=["postgresql", "mysql", "sqlite"], state="readonly")
         driver_combo.grid(row=0, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(driver_combo, "Select your database type:\n• MySQL: Default port 3306\n• PostgreSQL: Default port 5432\n• SQLite: File-based database")
         
         # Host
         ttk.Label(form_frame, text="Host:").grid(row=1, column=0, sticky=tk.W, pady=5)
         self.host_var = tk.StringVar(value="localhost")
-        ttk.Entry(form_frame, textvariable=self.host_var).grid(row=1, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        host_entry = ttk.Entry(form_frame, textvariable=self.host_var)
+        host_entry.grid(row=1, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(host_entry, "Database server hostname or IP address:\n• localhost or 127.0.0.1 for local\n• Remote server IP for network databases")
         
         # Port
         ttk.Label(form_frame, text="Port:").grid(row=2, column=0, sticky=tk.W, pady=5)
         self.port_var = tk.StringVar(value="3306")
-        ttk.Entry(form_frame, textvariable=self.port_var).grid(row=2, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        port_entry = ttk.Entry(form_frame, textvariable=self.port_var)
+        port_entry.grid(row=2, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(port_entry, "Database server port number:\n• MySQL: 3306 (default)\n• PostgreSQL: 5432 (default)\n• Custom ports as configured")
         
         # Database
         ttk.Label(form_frame, text="Database:").grid(row=3, column=0, sticky=tk.W, pady=5)
         self.database_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.database_var).grid(row=3, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        database_entry = ttk.Entry(form_frame, textvariable=self.database_var)
+        database_entry.grid(row=3, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(database_entry, "Name of the database to connect to:\n• Must exist on the server\n• Contains the tables you want to mock")
         
         # Username
         ttk.Label(form_frame, text="Username:").grid(row=4, column=0, sticky=tk.W, pady=5)
         self.username_var = tk.StringVar(value="root")
-        ttk.Entry(form_frame, textvariable=self.username_var).grid(row=4, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        username_entry = ttk.Entry(form_frame, textvariable=self.username_var)
+        username_entry.grid(row=4, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(username_entry, "Database username with sufficient privileges:\n• Read access for schema analysis\n• Write access for data insertion\n• CREATE/DROP for truncation operations")
         
         # Password
         ttk.Label(form_frame, text="Password:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.password_var = tk.StringVar(value="")
-        ttk.Entry(form_frame, textvariable=self.password_var, show="*").grid(row=5, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        password_entry = ttk.Entry(form_frame, textvariable=self.password_var, show="*")
+        password_entry.grid(row=5, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        ToolTip(password_entry, "Password for the database user:\n• Stored in memory only\n• Not saved to any files\n• Required for authentication")
         
         form_frame.columnconfigure(1, weight=1)
         
@@ -135,10 +248,12 @@ class DBMockerGUI:
         self.connect_button = ttk.Button(button_frame, text="Test Connection", 
                                         command=self.test_connection)
         self.connect_button.pack(side=tk.LEFT)
+        ToolTip(self.connect_button, "Test database connection without analyzing schema:\n• Validates connection parameters\n• Quick connectivity check\n• Does not perform schema analysis")
         
         self.analyze_button = ttk.Button(button_frame, text="Connect & Analyze Schema", 
                                         command=self.connect_and_analyze, state=tk.DISABLED)
         self.analyze_button.pack(side=tk.LEFT, padx=(10, 0))
+        ToolTip(self.analyze_button, "Connect to database and analyze schema:\n• Discovers all tables and columns\n• Analyzes constraints and relationships\n• Enables data generation features")
         
         # Status
         self.connection_status = ttk.Label(main_frame, text="Not connected", foreground="red")
@@ -463,8 +578,10 @@ class DBMockerGUI:
         pattern_analysis_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.analyze_existing_data_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(pattern_analysis_frame, text="🔍 Analyze existing data for realistic patterns", 
-                       variable=self.analyze_existing_data_var, command=self.toggle_pattern_options).pack(anchor=tk.W, pady=2)
+        pattern_checkbox = ttk.Checkbutton(pattern_analysis_frame, text="🔍 Analyze existing data for realistic patterns", 
+                       variable=self.analyze_existing_data_var, command=self.toggle_pattern_options)
+        pattern_checkbox.pack(anchor=tk.W, pady=2)
+        ToolTip(pattern_checkbox, "Enable intelligent pattern-based generation:\n• Analyzes existing data patterns\n• Generates realistic mock data\n• Maintains domain-specific formats\n• 80% pattern reuse for believable data")
         
         ttk.Label(pattern_analysis_frame, text="Generates realistic data based on existing records in your tables", 
                  font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
@@ -528,12 +645,61 @@ class DBMockerGUI:
                  font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
         
         # Advanced Generation Options
-        advanced_gen_frame = ttk.LabelFrame(scrollable_frame, text="Advanced Generation", padding=10)
+        advanced_gen_frame = ttk.LabelFrame(scrollable_frame, text="🚀 Advanced Generation Modes", padding=10)
         advanced_gen_frame.pack(fill=tk.X, pady=(0, 10))
         
+        # Generation Mode Selection
+        mode_frame = ttk.Frame(advanced_gen_frame)
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(mode_frame, text="Generation Mode:", font=("Arial", 10, "bold")).pack(anchor=tk.W)
+        
+        self.generation_mode_var = tk.StringVar(value="standard")
+        ttk.Radiobutton(mode_frame, text="🔄 Standard Generation", 
+                       variable=self.generation_mode_var, value="standard").pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(mode_frame, text="🧠 Smart Dependency-Aware Generation", 
+                       variable=self.generation_mode_var, value="smart").pack(anchor=tk.W, pady=2)
+        ttk.Radiobutton(mode_frame, text="🔍 Specification-Driven Generation (DESCRIBE-based)", 
+                       variable=self.generation_mode_var, value="spec").pack(anchor=tk.W, pady=2)
+        
+        # Mode descriptions
+        desc_frame = ttk.Frame(advanced_gen_frame)
+        desc_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        mode_descriptions = {
+            "standard": "Uses pattern analysis and standard constraint handling",
+            "smart": "Analyzes table dependencies for optimal insertion order and FK handling", 
+            "spec": "Uses exact DESCRIBE output for precise type and constraint compliance"
+        }
+        
+        self.mode_desc_var = tk.StringVar(value=mode_descriptions["standard"])
+        ttk.Label(desc_frame, textvariable=self.mode_desc_var, 
+                 font=("Arial", 9), foreground="gray").pack(anchor=tk.W)
+        
+        # Bind mode selection to update description
+        def update_mode_description(*args):
+            mode = self.generation_mode_var.get()
+            self.mode_desc_var.set(mode_descriptions.get(mode, ""))
+        
+        self.generation_mode_var.trace('w', update_mode_description)
+        
+        # Advanced Options
         self.show_dependency_plan_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(advanced_gen_frame, text="📋 Show dependency insertion plan", 
                        variable=self.show_dependency_plan_var).pack(anchor=tk.W, pady=2)
+        
+        self.show_table_specs_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(advanced_gen_frame, text="📊 Show detailed table specifications", 
+                       variable=self.show_table_specs_var).pack(anchor=tk.W, pady=2)
+        
+        # Max tables to show for specs
+        spec_limit_frame = ttk.Frame(advanced_gen_frame)
+        spec_limit_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(spec_limit_frame, text="Max tables to show in specs:").pack(side=tk.LEFT)
+        self.max_tables_shown_var = tk.StringVar(value="5")
+        ttk.Entry(spec_limit_frame, textvariable=self.max_tables_shown_var, width=10).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(spec_limit_frame, text="tables").pack(side=tk.LEFT)
         
         # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
@@ -766,6 +932,23 @@ class DBMockerGUI:
                 config.pattern_sample_size = int(self.pattern_sample_size_var.get())
             except (ValueError, AttributeError):
                 config.pattern_sample_size = 1000
+        
+        # Add generation mode preference
+        if hasattr(self, 'generation_mode_var'):
+            config.generation_mode = self.generation_mode_var.get()
+        
+        # Add advanced options
+        if hasattr(self, 'show_dependency_plan_var'):
+            config.show_dependency_plan = self.show_dependency_plan_var.get()
+        
+        if hasattr(self, 'show_table_specs_var'):
+            config.show_table_specs = self.show_table_specs_var.get()
+        
+        if hasattr(self, 'max_tables_shown_var'):
+            try:
+                config.max_tables_shown = int(self.max_tables_shown_var.get())
+            except (ValueError, AttributeError):
+                config.max_tables_shown = 5
         
         # Extract table configurations from tree
         if hasattr(self, 'config_tree'):
