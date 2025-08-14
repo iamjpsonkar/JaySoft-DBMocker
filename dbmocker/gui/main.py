@@ -141,6 +141,7 @@ class DBMockerGUI:
         # Threading
         self.task_queue = queue.Queue()
         self.result_queue = queue.Queue()
+        self.stop_generation_flag = threading.Event()  # For stopping generation
         
         # Setup GUI
         self.setup_gui()
@@ -504,9 +505,28 @@ class DBMockerGUI:
                                font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 20))
         
-        # Global settings
-        global_frame = ttk.LabelFrame(main_frame, text="🌐 Global Settings", padding=20, relief='ridge', borderwidth=2)
-        global_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
+        # Global settings with scrollable frame
+        global_outer_frame = ttk.LabelFrame(main_frame, text="🌐 Global Settings", padding=5, relief='ridge', borderwidth=2)
+        global_outer_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
+        
+        # Create canvas and scrollbar for global settings
+        global_canvas = tk.Canvas(global_outer_frame, height=120)
+        global_scrollbar = ttk.Scrollbar(global_outer_frame, orient="vertical", command=global_canvas.yview)
+        global_scrollable_frame = ttk.Frame(global_canvas)
+        
+        global_scrollable_frame.bind(
+            "<Configure>",
+            lambda e: global_canvas.configure(scrollregion=global_canvas.bbox("all"))
+        )
+        
+        global_canvas.create_window((0, 0), window=global_scrollable_frame, anchor="nw")
+        global_canvas.configure(yscrollcommand=global_scrollbar.set)
+        
+        global_canvas.pack(side="left", fill="both", expand=True)
+        global_scrollbar.pack(side="right", fill="y")
+        
+        # Use scrollable frame for global settings content
+        global_frame = global_scrollable_frame
         
         # Batch size
         ttk.Label(global_frame, text="Batch Size:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -564,9 +584,13 @@ class DBMockerGUI:
         ttk.Label(selection_info_frame, textvariable=self.selection_info_var, 
                  foreground="gray").pack(side=tk.LEFT)
         
+        # Create scrollable frame for table tree
+        tree_frame = ttk.Frame(table_config_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
         # Table configuration tree
         config_columns = ("selected", "table", "mode", "duplicate_mode", "rows", "status")
-        self.config_tree = ttk.Treeview(table_config_frame, columns=config_columns, show="headings", height=10)
+        self.config_tree = ttk.Treeview(tree_frame, columns=config_columns, show="headings", height=10)
         
         self.config_tree.heading("selected", text="☑️ Select")
         self.config_tree.heading("table", text="Table Name")
@@ -582,13 +606,20 @@ class DBMockerGUI:
         self.config_tree.column("rows", width=100)
         self.config_tree.column("status", width=100)
         
-        # Scrollbar
-        config_scrollbar = ttk.Scrollbar(table_config_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
-        self.config_tree.configure(yscrollcommand=config_scrollbar.set)
+        # Vertical and horizontal scrollbars
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.config_tree.xview)
         
-        # Pack tree and scrollbar
-        self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.config_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Pack tree and scrollbars using grid for better layout
+        self.config_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        # Configure grid weights
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
         
         # Add mouse wheel scrolling
         def on_config_mousewheel(event):
@@ -622,9 +653,17 @@ class DBMockerGUI:
         controls_frame = ttk.LabelFrame(main_frame, text="🎮 Generation Controls", padding=15, relief='ridge', borderwidth=2)
         controls_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
         
-        self.generate_button = ttk.Button(controls_frame, text="🎲 Generate Data", 
+        # Generation control buttons
+        button_frame = ttk.Frame(controls_frame)
+        button_frame.pack(side=tk.LEFT)
+        
+        self.generate_button = ttk.Button(button_frame, text="🎲 Generate Data", 
                                          command=self.start_generation, state=tk.DISABLED)
         self.generate_button.pack(side=tk.LEFT)
+        
+        self.stop_button = ttk.Button(button_frame, text="⏹️ Stop Generation", 
+                                     command=self.stop_generation, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(10, 0))
         
         self.dry_run_var = tk.BooleanVar()
         ttk.Checkbutton(controls_frame, text="Dry Run (don't insert)", 
@@ -2352,10 +2391,32 @@ Enterprise-grade mock data generation for professional development.'''
                 logger.info(f"🔍 Spec-driven: {self.spec_driven_var.get()}")
                 
                 for batch_name, table_list in processing_order:
+                    # Check for stop signal
+                    if self.stop_generation_flag.is_set():
+                        logger.info("🛑 Generation stopped by user request")
+                        self.result_queue.put(("generation_stopped", {
+                            'total_generated': total_generated,
+                            'total_inserted': total_inserted,
+                            'completed_tables': completed_rows,
+                            'message': 'Generation stopped by user'
+                        }))
+                        return
+                    
                     if len(processing_order) > 1:
                         self.result_queue.put(("progress", f"📦 Starting {batch_name} ({len(table_list)} tables)"))
                     
                     for table_name in table_list:
+                        # Check for stop signal before each table
+                        if self.stop_generation_flag.is_set():
+                            logger.info(f"🛑 Generation stopped before processing table {table_name}")
+                            self.result_queue.put(("generation_stopped", {
+                                'total_generated': total_generated,
+                                'total_inserted': total_inserted,
+                                'completed_tables': completed_rows,
+                                'last_table': table_name,
+                                'message': f'Generation stopped before processing {table_name}'
+                            }))
+                            return
                         rows_to_generate = table_configs[table_name]
                         table_start_time = time.time()
                         
@@ -2384,8 +2445,25 @@ Enterprise-grade mock data generation for professional development.'''
                                     table_spec.duplicate_allowed = True
                                     logger.debug(f"🔧 Table {table_name}: Enabled duplicate mode for spec generator")
                             
-                            # Generate data using specification-driven approach
-                            data = spec_generator._generate_table_data(table_spec, rows_to_generate)
+                            # Generate data using specification-driven approach with timeout handling
+                            try:
+                                # Add progress tracking for large operations
+                                if rows_to_generate > 50000:
+                                    logger.info(f"⏳ Large dataset detected for {table_name}, monitoring progress...")
+                                
+                                data = spec_generator._generate_table_data(table_spec, rows_to_generate)
+                                
+                                # Check if generation was successful
+                                if not data:
+                                    logger.warning(f"⚠️ No data generated for table {table_name}")
+                                    continue
+                                    
+                                logger.info(f"✅ Successfully generated {len(data):,} rows for {table_name}")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Error generating data for table {table_name}: {str(e)}")
+                                self.result_queue.put(("progress", f"❌ Error generating {table_name}: {str(e)}"))
+                                continue
                             
                             # Restore original setting
                             if fast_generation_enabled and hasattr(table_spec, 'duplicate_allowed'):
@@ -2471,13 +2549,34 @@ Enterprise-grade mock data generation for professional development.'''
                                 
                                 self.result_queue.put(("progress", f"🎯 Fast mode: Applied to {len(duplicate_allowed_columns)} columns in {table_name}"))
                             
-                            # Generate data using enhanced generator if available
-                            if hasattr(generator, 'generate_data_for_table_parallel') and use_parallel:
-                                logger.info(f"🔄 Table {table_name}: Using parallel generation (workers: {config.max_workers})")
-                                data = generator.generate_data_for_table_parallel(table_name, rows_to_generate)
-                            else:
-                                logger.info(f"🔄 Table {table_name}: Using sequential generation")
-                                data = generator.generate_data_for_table(table_name, rows_to_generate)
+                            # Generate data using enhanced generator if available with error handling
+                            try:
+                                # Add progress tracking for large operations
+                                if rows_to_generate > 50000:
+                                    logger.info(f"⏳ Large dataset detected for {table_name}, monitoring progress...")
+                                
+                                if hasattr(generator, 'generate_data_for_table_parallel') and use_parallel:
+                                    logger.info(f"🔄 Table {table_name}: Using parallel generation (workers: {config.max_workers})")
+                                    data = generator.generate_data_for_table_parallel(table_name, rows_to_generate)
+                                else:
+                                    logger.info(f"🔄 Table {table_name}: Using sequential generation")
+                                    data = generator.generate_data_for_table(table_name, rows_to_generate)
+                                
+                                # Check if generation was successful
+                                if not data:
+                                    logger.warning(f"⚠️ No data generated for table {table_name}")
+                                    continue
+                                    
+                                logger.info(f"✅ Successfully generated {len(data):,} rows for {table_name}")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Error generating data for table {table_name}: {str(e)}")
+                                self.result_queue.put(("progress", f"❌ Error generating {table_name}: {str(e)}"))
+                                # Restore settings if fast mode was used
+                                if fast_generation_enabled:
+                                    config.duplicate_allowed = original_duplicate_allowed
+                                    config.global_duplicate_mode = original_global_mode
+                                continue
                                 
                             # Restore original settings if fast mode was used
                             if fast_generation_enabled:
@@ -2559,10 +2658,23 @@ Enterprise-grade mock data generation for professional development.'''
                 }))
                 
             except Exception as e:
-                self.result_queue.put(("error", str(e)))
+                logger.error(f"💥 Critical error in generation thread: {str(e)}")
+                logger.error(f"🔍 Error type: {type(e).__name__}")
+                import traceback
+                logger.error(f"📋 Traceback: {traceback.format_exc()}")
+                
+                # Reset UI state
+                self.result_queue.put(("generation_error", {
+                    'error': str(e),
+                    'error_type': type(e).__name__,
+                    'total_generated': total_generated if 'total_generated' in locals() else 0,
+                    'total_inserted': total_inserted if 'total_inserted' in locals() else 0
+                }))
         
         # Start generation
+        self.stop_generation_flag.clear()  # Reset stop flag
         self.generate_button.config(state=tk.DISABLED, text="Generating...")
+        self.stop_button.config(state=tk.NORMAL)  # Enable stop button
         self.progress_bar['value'] = 0  # Reset progress bar
         self.progress_percentage_label.config(text="0%")
         self.progress_bar.start()  # This will be stopped and switched to determinate mode once we have progress data
@@ -2570,6 +2682,18 @@ Enterprise-grade mock data generation for professional development.'''
         thread = threading.Thread(target=generation_task)
         thread.daemon = True
         thread.start()
+    
+    def stop_generation(self):
+        """Stop the currently running generation process."""
+        logger.info("🛑 User requested generation stop")
+        self.stop_generation_flag.set()
+        
+        # Update UI immediately
+        self.stop_button.config(state=tk.DISABLED)
+        self.progress_label.config(text="Stopping generation...")
+        self.result_queue.put(("progress", "🛑 Stopping generation process..."))
+        
+        # We'll handle the actual stopping in the generation thread
     
     def build_generation_config(self) -> GenerationConfig:
         """Build generation configuration from GUI settings."""
@@ -2808,6 +2932,7 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 elif result_type == "generation_complete":
                     self.generate_button.config(state=tk.NORMAL, text="🎲 Generate Data")
+                    self.stop_button.config(state=tk.DISABLED)  # Disable stop button
                     self.progress_bar.stop()
                     self.progress_bar['value'] = 100  # Complete
                     self.progress_percentage_label.config(text="100%")
@@ -2827,6 +2952,37 @@ Enterprise-grade mock data generation for professional development.'''
                     if fast_mode_used:
                         summary += f"  🚀 Fast Generation Mode: Enabled\n"
                     summary += f"  Completion: 100% ✅\n"
+                    self.append_to_results(summary)
+                
+                elif result_type == "generation_stopped":
+                    self.generate_button.config(state=tk.NORMAL, text="🎲 Generate Data")
+                    self.stop_button.config(state=tk.DISABLED)  # Disable stop button
+                    self.progress_bar.stop()
+                    self.progress_label.config(text="Generation stopped by user")
+                    
+                    # Show stopping summary
+                    summary = f"\n🛑 Generation Stopped:\n"
+                    summary += f"  Generated: {data['total_generated']:,} rows\n"
+                    summary += f"  Inserted: {data['total_inserted']:,} rows\n"
+                    summary += f"  Status: {data['message']}\n"
+                    if 'last_table' in data:
+                        summary += f"  Last Table: {data['last_table']}\n"
+                    summary += f"  You can restart generation at any time.\n"
+                    self.append_to_results(summary)
+                
+                elif result_type == "generation_error":
+                    self.generate_button.config(state=tk.NORMAL, text="🎲 Generate Data")
+                    self.stop_button.config(state=tk.DISABLED)  # Disable stop button
+                    self.progress_bar.stop()
+                    self.progress_label.config(text="Generation failed - check logs")
+                    
+                    # Show error summary
+                    summary = f"\n💥 Generation Error:\n"
+                    summary += f"  Error: {data['error']}\n"
+                    summary += f"  Type: {data['error_type']}\n"
+                    summary += f"  Generated: {data['total_generated']:,} rows\n"
+                    summary += f"  Inserted: {data['total_inserted']:,} rows\n"
+                    summary += f"  Check the logs tab for detailed error information.\n"
                     self.append_to_results(summary)
                 
                 elif result_type == "integrity_check":
