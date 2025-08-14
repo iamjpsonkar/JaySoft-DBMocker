@@ -286,12 +286,21 @@ class DBMockerGUI:
         port_entry.grid(row=2, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         ToolTip(port_entry, "Database server port number:\n• MySQL: 3306 (default)\n• PostgreSQL: 5432 (default)\n• Custom ports as configured")
         
+        # Test connection button (above database selection)
+        test_connect_frame = ttk.Frame(form_frame)
+        test_connect_frame.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=(10, 5))
+        
+        self.test_connect_button = ttk.Button(test_connect_frame, text="🔗 Test Connection", 
+                                             command=self.test_server_connection)
+        self.test_connect_button.pack()
+        ToolTip(self.test_connect_button, "Test database server connection:\n• Validates host, port, credentials\n• Does not require database selection\n• Confirms server accessibility")
+        
         # Database selection
-        ttk.Label(form_frame, text="Database:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="Database:").grid(row=4, column=0, sticky=tk.W, pady=5)
         
         # Database selection frame to hold combobox and refresh button
         db_frame = ttk.Frame(form_frame)
-        db_frame.grid(row=3, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        db_frame.grid(row=4, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         db_frame.columnconfigure(0, weight=1)
         
         self.database_var = tk.StringVar()
@@ -307,17 +316,17 @@ class DBMockerGUI:
         ToolTip(self.refresh_db_button, "Refresh database list:\n• Reconnects to server\n• Updates available databases\n• Use after database changes on server")
         
         # Username
-        ttk.Label(form_frame, text="Username:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="Username:").grid(row=5, column=0, sticky=tk.W, pady=5)
         self.username_var = tk.StringVar(value="root")
         username_entry = ttk.Entry(form_frame, textvariable=self.username_var)
-        username_entry.grid(row=4, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        username_entry.grid(row=5, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         ToolTip(username_entry, "Database username with sufficient privileges:\n• Read access for schema analysis\n• Write access for data insertion\n• CREATE/DROP for truncation operations")
         
         # Password
-        ttk.Label(form_frame, text="Password:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        ttk.Label(form_frame, text="Password:").grid(row=6, column=0, sticky=tk.W, pady=5)
         self.password_var = tk.StringVar(value="")
         password_entry = ttk.Entry(form_frame, textvariable=self.password_var, show="*")
-        password_entry.grid(row=5, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        password_entry.grid(row=6, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         ToolTip(password_entry, "Password for the database user:\n• Stored in memory only\n• Not saved to any files\n• Required for authentication")
         
         form_frame.columnconfigure(1, weight=1)
@@ -555,6 +564,22 @@ class DBMockerGUI:
         
         # Add handler to root logger
         logging.getLogger().addHandler(self.log_handler)
+    
+    def test_server_connection(self):
+        """Test database server connection without selecting a specific database."""
+        try:
+            # Get basic connection config for server connection
+            config = self.get_db_config(for_server_connection=True)
+            
+            # Test server connection
+            with DatabaseConnection(config) as db_conn:
+                # Just test the connection - don't fetch databases yet
+                self.connection_status.config(text="✅ Server connection successful!", foreground="green")
+                tk.messagebox.showinfo("Connection Test", "✅ Server connection successful!\n\nYou can now click 'Connect & List Databases' to see available databases.")
+                
+        except Exception as e:
+            self.connection_status.config(text=f"❌ Connection failed: {str(e)}", foreground="red")
+            tk.messagebox.showerror("Connection Error", f"❌ Failed to connect to server:\n\n{str(e)}")
     
     def test_connection(self):
         """Test database connection and fetch available databases."""
