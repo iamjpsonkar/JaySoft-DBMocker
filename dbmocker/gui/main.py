@@ -24,10 +24,14 @@ from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optim
 class ToolTip:
     """Cross-platform tooltip implementation for GUI elements."""
     
+    # Class variable to track the currently active tooltip
+    _active_tooltip = None
+    
     def __init__(self, widget, text):
         self.widget = widget
         self.text = text
         self.tooltip_window = None
+        self.hover_job = None  # Store the delayed job for cancellation
         self.widget.bind("<Enter>", self.on_enter)
         self.widget.bind("<Leave>", self.on_leave)
         
@@ -39,19 +43,40 @@ class ToolTip:
     
     def on_enter(self, event=None):
         """Show tooltip on mouse enter (with delay)."""
-        self.widget.after(1000, self.show_tooltip)
+        # Cancel any existing hover job
+        if self.hover_job:
+            self.widget.after_cancel(self.hover_job)
+        
+        # Schedule new tooltip show with delay
+        self.hover_job = self.widget.after(1000, self.show_tooltip)
     
     def on_leave(self, event=None):
         """Hide tooltip on mouse leave."""
+        # Cancel any pending hover job
+        if self.hover_job:
+            self.widget.after_cancel(self.hover_job)
+            self.hover_job = None
+        
+        # Hide current tooltip
         if self.tooltip_window:
             self.tooltip_window.destroy()
             self.tooltip_window = None
+            # Clear active tooltip if it's this one
+            if ToolTip._active_tooltip == self:
+                ToolTip._active_tooltip = None
     
     def show_tooltip(self, event=None):
         """Display the tooltip."""
         if self.tooltip_window or not self.text:
             return
-            
+        
+        # Hide any currently active tooltip
+        if ToolTip._active_tooltip and ToolTip._active_tooltip != self:
+            ToolTip._active_tooltip.hide_tooltip()
+        
+        # Set this as the active tooltip
+        ToolTip._active_tooltip = self
+        
         x = self.widget.winfo_rootx() + 25
         y = self.widget.winfo_rooty() + 25
         
@@ -70,6 +95,16 @@ class ToolTip:
                         relief=tk.SOLID, borderwidth=1,
                         font=("Arial", "9", "normal"))
         label.pack(ipadx=1)
+    
+    def hide_tooltip(self):
+        """Hide the tooltip window."""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+        
+        # Clear active tooltip if it's this one
+        if ToolTip._active_tooltip == self:
+            ToolTip._active_tooltip = None
 
 
 class DBMockerGUI:
