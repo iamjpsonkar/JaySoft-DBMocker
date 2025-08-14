@@ -1501,9 +1501,12 @@ class DBMockerGUI:
                                font=("Arial", 16, "bold"))
         title_label.pack(pady=(0, 20))
         
-        # Create scrollable frame for all options
-        canvas = tk.Canvas(main_frame)
-        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        # Create scrollable frame for all options (full width)
+        container_frame = ttk.Frame(main_frame)
+        container_frame.pack(fill=tk.BOTH, expand=True)
+        
+        canvas = tk.Canvas(container_frame)
+        scrollbar = ttk.Scrollbar(container_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
         scrollable_frame.bind(
@@ -1511,8 +1514,18 @@ class DBMockerGUI:
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        # Store the window ID for later configuration
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Bind canvas width to scrollable frame width for full width usage
+        def configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Make scrollable frame use full canvas width
+            canvas_width = event.width
+            canvas.itemconfig(canvas_window, width=canvas_width)
+        
+        canvas.bind('<Configure>', configure_scroll_region)
         
         # Table Filtering Options
         filter_frame = ttk.LabelFrame(scrollable_frame, text="Table Filtering", padding=10)
@@ -1745,7 +1758,7 @@ class DBMockerGUI:
         ttk.Entry(spec_limit_frame, textvariable=self.max_tables_shown_var, width=10).pack(side=tk.LEFT, padx=(10, 5))
         ttk.Label(spec_limit_frame, text="tables").pack(side=tk.LEFT)
         
-        # Pack canvas and scrollbar
+        # Pack canvas and scrollbar for full width
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
@@ -2793,6 +2806,20 @@ Enterprise-grade mock data generation for professional development.'''
                         )
                 
                 config.table_configs[table_name] = table_config
+        
+        # Apply global duplicate settings if enabled for maximum speed
+        if hasattr(self, 'enable_duplicates_var') and self.enable_duplicates_var.get():
+            # Enable global duplicate mode for faster generation
+            config.duplicate_allowed = True
+            config.global_duplicate_mode = "allow_duplicates"
+            config.global_duplicate_probability = 1.0  # 100% duplicates for maximum speed
+            
+            logger.info(f"🔄 Global duplicate mode enabled for maximum generation speed")
+            
+            # Also enable fast generation mode automatically when duplicates are enabled
+            if hasattr(self, 'fast_generation_var'):
+                self.fast_generation_var.set(True)
+                logger.info(f"🚀 Fast generation mode auto-enabled with duplicates")
         
         return config
     
