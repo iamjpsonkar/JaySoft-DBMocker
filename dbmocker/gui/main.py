@@ -193,7 +193,10 @@ class DBMockerGUI:
     
     def setup_gui(self):
         """Setup the GUI layout."""
-        # Create main notebook for tabs
+        # FIRST: Create Done button at bottom to reserve space
+        self.setup_done_button()
+        
+        # THEN: Create main notebook for tabs  
         # Main container with border
         main_container = ttk.Frame(self.root, relief='ridge', borderwidth=3)
         main_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -231,8 +234,7 @@ class DBMockerGUI:
         self.notebook.add(self.logs_frame, text="Logs")
         self.setup_logs_tab()
         
-        # Add Done button at the bottom
-        self.setup_done_button()
+
     
     def setup_connection_tab(self):
         """Setup database connection tab."""
@@ -676,14 +678,14 @@ class DBMockerGUI:
         # Clear existing items
         self.config_tree.delete(*self.config_tree.get_children())
         
-        # Add tables with default configuration
+        # Add tables with default configuration (deselected by default)
         for table in schema.tables:
             self.config_tree.insert("", tk.END, values=(
-                "☑️",  # Selected by default
+                "☐",  # Deselected by default for normal workflow
                 table.name,
                 "Generate New",  # Default mode
                 self.default_rows_var.get(),
-                "Ready"
+                "Disabled"  # Disabled since not selected
             ))
         
         # Update selection info
@@ -1159,7 +1161,7 @@ class DBMockerGUI:
         """Setup the Done button at the bottom of the window."""
         # Create a frame for the bottom buttons - ensure it's at the very bottom
         bottom_frame = ttk.LabelFrame(self.root, text="🔧 Actions", padding=10, relief='ridge', borderwidth=2)
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(5, 8))
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=8)
         
         # Add separator line
         separator = ttk.Separator(bottom_frame, orient='horizontal')
