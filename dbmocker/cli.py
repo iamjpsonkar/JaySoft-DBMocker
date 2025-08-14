@@ -13,7 +13,7 @@ from dbmocker.core.database import DatabaseConnection, DatabaseConfig
 from dbmocker.core.analyzer import SchemaAnalyzer
 from dbmocker.core.generator import DataGenerator
 from dbmocker.core.inserter import DataInserter
-from dbmocker.core.models import GenerationConfig, TableGenerationConfig
+from dbmocker.core.models import GenerationConfig, TableGenerationConfig, ColumnGenerationConfig
 from dbmocker.core.dependency_resolver import DependencyResolver, print_insertion_plan
 from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optimal_generation_config
 from dbmocker.core.db_spec_analyzer import DatabaseSpecAnalyzer, print_table_specs
@@ -176,6 +176,10 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
 @click.option('--config', '-c', type=click.Path(exists=True), help='Configuration file (JSON/YAML)')
 @click.option('--rows', '-r', type=int, default=1000, help='Number of rows to generate per table')
 @click.option('--batch-size', type=int, default=1000, help='Batch size for inserts')
+@click.option('--max-workers', type=int, default=4, help='Number of worker threads')
+@click.option('--enable-multiprocessing', is_flag=True, help='Enable multiprocessing for large datasets (millions of rows)')
+@click.option('--max-processes', type=int, default=2, help='Number of processes for multiprocessing')
+@click.option('--rows-per-process', type=int, default=100000, help='Rows per process threshold for multiprocessing')
 @click.option('--include-tables', help='Comma-separated list of tables to include')
 @click.option('--exclude-tables', help='Comma-separated list of tables to exclude')
 @click.option('--use-existing-tables', help='Comma-separated list of tables to use existing data from (mixed mode)')
@@ -187,11 +191,25 @@ def analyze(host: str, port: int, database: str, username: str, password: str,
               help='Analyze existing data for realistic generation patterns')
 @click.option('--pattern-sample-size', default=1000, type=int,
               help='Sample size for existing data pattern analysis')
+@click.option('--duplicate-allowed/--generate-new-only', default=False,
+              help='Allow duplicates for columns without constraints (default: generate new only)')
+@click.option('--global-duplicate-mode', type=click.Choice(['generate_new', 'allow_duplicates', 'smart_duplicates']),
+              default='generate_new', help='Global duplicate mode for all columns')
+@click.option('--global-duplicate-probability', default=0.5, type=float,
+              help='Probability for global smart duplicates (0.0-1.0)')
+@click.option('--global-max-duplicate-values', default=10, type=int,
+              help='Maximum unique values in global smart duplicate mode')
+@click.option('--allow-duplicates', is_flag=True, help='Allow duplicate values when column constraints permit')
+@click.option('--duplicate-probability', default=1.0, type=float,
+              help='Probability of using duplicates when allowed (0.0-1.0, default: 1.0)')
 def generate(host: str, port: int, database: str, username: str, password: str,
-            driver: str, config: Optional[str], rows: int, batch_size: int,
+            driver: str, config: Optional[str], rows: int, batch_size: int, max_workers: int,
+            enable_multiprocessing: bool, max_processes: int, rows_per_process: int,
             include_tables: Optional[str], exclude_tables: Optional[str],
             use_existing_tables: Optional[str], truncate: bool, seed: Optional[int], 
-            dry_run: bool, verify: bool, analyze_existing_data: bool, pattern_sample_size: int):
+            dry_run: bool, verify: bool, analyze_existing_data: bool, pattern_sample_size: int,
+            duplicate_allowed: bool, global_duplicate_mode: str, global_duplicate_probability: float,
+            global_max_duplicate_values: int, allow_duplicates: bool, duplicate_probability: float):
     """Generate and insert mock data into database."""
     try:
         # Parse table lists
@@ -202,11 +220,23 @@ def generate(host: str, port: int, database: str, username: str, password: str,
         # Load configuration
         generation_config = GenerationConfig(
             batch_size=batch_size,
+            max_workers=max_workers,
+            enable_multiprocessing=enable_multiprocessing,
+            max_processes=max_processes,
+            rows_per_process=rows_per_process,
             seed=seed,
             include_tables=include_list,
             exclude_tables=exclude_list or [],
             use_existing_tables=use_existing_list,
-            truncate_existing=truncate
+            truncate_existing=truncate,
+            # Global duplicate settings
+            duplicate_allowed=duplicate_allowed,
+            global_duplicate_mode=global_duplicate_mode,
+            global_duplicate_probability=global_duplicate_probability,
+            global_max_duplicate_values=global_max_duplicate_values,
+            # Legacy duplicate settings (for backward compatibility)
+            allow_duplicates=allow_duplicates,
+            duplicate_probability=duplicate_probability
         )
         
         if config:
@@ -251,9 +281,15 @@ def generate(host: str, port: int, database: str, username: str, password: str,
                 pattern_sample_size=pattern_sample_size
             )
             
-            # Initialize components
-            generator = DataGenerator(schema, generation_config, db_conn)
-            inserter = DataInserter(db_conn, schema)
+            # Initialize components (use parallel generator if multiprocessing is enabled)
+            if enable_multiprocessing or max_workers > 1:
+                from dbmocker.core.parallel_generator import ParallelDataGenerator, ParallelDataInserter
+                generator = ParallelDataGenerator(schema, generation_config, db_conn)
+                inserter = ParallelDataInserter(db_conn, schema)
+                click.echo(f"🚀 Using parallel processing: MP={enable_multiprocessing}, Workers={max_workers}")
+            else:
+                generator = DataGenerator(schema, generation_config, db_conn)
+                inserter = DataInserter(db_conn, schema)
             
             # Sort tables by dependencies
             dependencies = schema.get_table_dependencies()
@@ -304,7 +340,11 @@ def generate(host: str, port: int, database: str, username: str, password: str,
                 click.echo(f"  🎲 Generating {table_rows:,} rows...")
                 table_start_time = time.time()
                 
-                generated_data = generator.generate_data_for_table(table_name, table_rows)
+                # Use parallel generation method if available
+                if hasattr(generator, 'generate_data_for_table_parallel'):
+                    generated_data = generator.generate_data_for_table_parallel(table_name, table_rows)
+                else:
+                    generated_data = generator.generate_data_for_table(table_name, table_rows)
                 total_rows_generated += len(generated_data)
                 
                 generation_time = time.time() - table_start_time
@@ -315,12 +355,22 @@ def generate(host: str, port: int, database: str, username: str, password: str,
                     click.echo(f"  💾 Inserting data...")
                     insert_start_time = time.time()
                     
-                    stats = inserter.insert_data(
-                        table_name, 
-                        generated_data, 
-                        batch_size,
-                        progress_callback=lambda tn, inserted, total: None
-                    )
+                    # Use parallel insertion method if available
+                    if hasattr(inserter, 'insert_data_parallel'):
+                        stats = inserter.insert_data_parallel(
+                            table_name, 
+                            generated_data, 
+                            batch_size,
+                            max_workers,
+                            progress_callback=lambda tn, inserted, total: None
+                        )
+                    else:
+                        stats = inserter.insert_data(
+                            table_name, 
+                            generated_data, 
+                            batch_size,
+                            progress_callback=lambda tn, inserted, total: None
+                        )
                     
                     total_rows_inserted += stats.total_rows_generated
                     insert_time = time.time() - insert_start_time
@@ -421,6 +471,217 @@ def init_config(output: str):
     
     click.echo(f"✅ Configuration template created: {output_path}")
     click.echo("Edit this file to customize your data generation settings.")
+
+
+@cli.command()
+@click.option('--driver', required=True, type=click.Choice(['mysql', 'postgresql', 'sqlite']),
+              help='Database driver')
+@click.option('--host', default='localhost', help='Database host')  
+@click.option('--port', type=int, help='Database port')
+@click.option('--database', required=True, help='Database name')
+@click.option('--username', help='Database username')
+@click.option('--password', help='Database password')
+@click.option('--rows', default=1000000, help='Number of rows to generate per table (default: 1M)')
+@click.option('--batch-size', default=10000, help='Batch size for inserts (default: 10K)')
+@click.option('--max-workers', default=8, help='Number of worker threads (default: 8)')
+@click.option('--max-processes', default=4, help='Number of processes (default: 4)')
+@click.option('--rows-per-process', default=250000, help='Rows per process threshold (default: 250K)')
+@click.option('--include-tables', help='Comma-separated list of tables to include')
+@click.option('--exclude-tables', help='Comma-separated list of tables to exclude')
+@click.option('--truncate', is_flag=True, help='Truncate tables before inserting')
+@click.option('--dry-run', is_flag=True, help='Show performance plan without inserting')
+@click.option('--seed', type=int, help='Random seed for reproducible data')
+@click.option('--enable-duplicates', help='Comma-separated list of columns to allow duplicates (format: table.column)')
+@click.option('--smart-duplicates', help='Comma-separated list of columns for smart duplicate generation (format: table.column)')
+@click.option('--duplicate-probability', default=0.5, type=float, help='Probability for smart duplicates (0.0-1.0)')
+@click.option('--max-duplicate-values', default=10, type=int, help='Maximum unique values in smart duplicate mode')
+@click.option('--allow-duplicates-global', is_flag=True, help='Allow duplicates globally when column constraints permit')
+@click.option('--global-duplicate-probability', default=1.0, type=float,
+              help='Global probability of using duplicates when allowed (0.0-1.0, default: 1.0)')
+def high_performance(driver, host, port, database, username, password, rows, batch_size, 
+                    max_workers, max_processes, rows_per_process, include_tables, exclude_tables,
+                    truncate, dry_run, seed, enable_duplicates, smart_duplicates, 
+                    duplicate_probability, max_duplicate_values, allow_duplicates_global, 
+                    global_duplicate_probability):
+    """🚀 High-performance generation for millions of records with multiprocessing."""
+    
+    start_time = time.time()
+    
+    try:
+        # Set random seed
+        if seed is not None:
+            import random
+            random.seed(seed)
+            click.echo(f"🎲 Using random seed: {seed}")
+        
+        # Create database configuration
+        db_config = DatabaseConfig(
+            host=host,
+            port=port or get_default_port(driver),
+            database=database,
+            username=username,
+            password=password or '',
+            driver=driver
+        )
+        
+        # Connect to database
+        click.echo(f"🔌 Connecting to {driver} database at {host}...")
+        db_conn = DatabaseConnection(db_config)
+        db_conn.connect()
+        
+        # Parse table lists
+        include_list = include_tables.split(',') if include_tables else None
+        exclude_list = exclude_tables.split(',') if exclude_tables else None
+        
+        # Parse duplicate configuration
+        duplicate_config = {}
+        smart_duplicate_config = {}
+        
+        if enable_duplicates:
+            for entry in enable_duplicates.split(','):
+                if '.' in entry:
+                    table_name, column_name = entry.strip().split('.', 1)
+                    if table_name not in duplicate_config:
+                        duplicate_config[table_name] = []
+                    duplicate_config[table_name].append(column_name)
+        
+        if smart_duplicates:
+            for entry in smart_duplicates.split(','):
+                if '.' in entry:
+                    table_name, column_name = entry.strip().split('.', 1)
+                    if table_name not in smart_duplicate_config:
+                        smart_duplicate_config[table_name] = []
+                    smart_duplicate_config[table_name].append(column_name)
+        
+        # Analyze schema
+        click.echo("🔍 Analyzing database schema...")
+        analyzer = SchemaAnalyzer(db_conn)
+        schema = analyzer.analyze_schema(
+            include_tables=include_list,
+            exclude_tables=exclude_list
+        )
+        
+        # Configure high-performance generation
+        generation_config = GenerationConfig(
+            batch_size=batch_size,
+            max_workers=max_workers,
+            enable_multiprocessing=True,
+            max_processes=max_processes,
+            rows_per_process=rows_per_process,
+            seed=seed,
+            include_tables=include_list,
+            exclude_tables=exclude_list or [],
+            truncate_existing=truncate,
+            allow_duplicates=allow_duplicates_global,
+            duplicate_probability=global_duplicate_probability
+        )
+        
+        # Add duplicate configuration
+        for table_name, columns in duplicate_config.items():
+            if table_name not in generation_config.table_configs:
+                generation_config.table_configs[table_name] = TableGenerationConfig()
+            
+            for column_name in columns:
+                generation_config.table_configs[table_name].column_configs[column_name] = ColumnGenerationConfig(
+                    duplicate_mode="allow_duplicates"
+                )
+        
+        # Add smart duplicate configuration
+        for table_name, columns in smart_duplicate_config.items():
+            if table_name not in generation_config.table_configs:
+                generation_config.table_configs[table_name] = TableGenerationConfig()
+            
+            for column_name in columns:
+                generation_config.table_configs[table_name].column_configs[column_name] = ColumnGenerationConfig(
+                    duplicate_mode="smart_duplicates",
+                    duplicate_probability=duplicate_probability,
+                    max_duplicate_values=max_duplicate_values
+                )
+        
+        # Initialize high-performance components
+        from dbmocker.core.parallel_generator import ParallelDataGenerator, ParallelDataInserter
+        generator = ParallelDataGenerator(schema, generation_config, db_conn)
+        inserter = ParallelDataInserter(db_conn, schema)
+        
+        # Show performance plan
+        total_tables = len(schema.tables)
+        total_estimated_rows = total_tables * rows
+        estimated_time = total_estimated_rows / 10000  # Rough estimate: 10K rows per second
+        
+        click.echo(f"\n🚀 High-Performance Generation Plan:")
+        click.echo(f"  Tables to process: {total_tables}")
+        click.echo(f"  Rows per table: {rows:,}")
+        click.echo(f"  Total estimated rows: {total_estimated_rows:,}")
+        click.echo(f"  Batch size: {batch_size:,}")
+        click.echo(f"  Worker threads: {max_workers}")
+        click.echo(f"  Processes: {max_processes}")
+        click.echo(f"  Rows per process: {rows_per_process:,}")
+        click.echo(f"  Multiprocessing: Enabled")
+        click.echo(f"  Estimated time: {estimated_time/60:.1f} minutes")
+        
+        if duplicate_config:
+            click.echo(f"  Duplicate columns configured:")
+            for table_name, columns in duplicate_config.items():
+                click.echo(f"    • {table_name}: {', '.join(columns)} (allow_duplicates)")
+        
+        if smart_duplicate_config:
+            click.echo(f"  Smart duplicate columns configured:")
+            for table_name, columns in smart_duplicate_config.items():
+                click.echo(f"    • {table_name}: {', '.join(columns)} (smart_duplicates, p={duplicate_probability}, max={max_duplicate_values})")
+        
+        if allow_duplicates_global:
+            click.echo(f"  Global duplicates: Enabled (probability={global_duplicate_probability})")
+            click.echo(f"    → All columns without constraints will use duplicates")
+        
+        if dry_run:
+            click.echo(f"\n🔍 DRY RUN - Performance plan shown above")
+            return
+        
+        # Confirm before proceeding
+        if not click.confirm(f"\nProceed with high-performance generation of {total_estimated_rows:,} rows?"):
+            click.echo("❌ Generation cancelled")
+            return
+        
+        # Generate data for all tables in parallel
+        click.echo("\n🚀 Starting high-performance generation...")
+        all_data = generator.generate_data_for_all_tables_parallel(rows)
+        
+        # Insert data using parallel inserter
+        total_inserted = 0
+        
+        click.echo("\n💾 Inserting generated data using parallel processing...")
+        for table_name, data in all_data.items():
+            if data:
+                click.echo(f"  📦 Processing {table_name}: {len(data):,} rows")
+                
+                if truncate:
+                    inserter.truncate_table(table_name)
+                
+                stats = inserter.insert_data_parallel(
+                    table_name, data, batch_size, max_workers
+                )
+                total_inserted += stats.total_rows_generated
+                
+                click.echo(f"  ✅ {table_name}: {stats.total_rows_generated:,} rows inserted")
+        
+        elapsed_time = time.time() - start_time
+        rows_per_second = total_inserted / elapsed_time if elapsed_time > 0 else 0
+        
+        click.echo(f"\n🎉 High-performance generation completed successfully!")
+        click.echo(f"📊 Performance Summary:")
+        click.echo(f"  Total rows inserted: {total_inserted:,}")
+        click.echo(f"  Tables processed: {total_tables}")
+        click.echo(f"  Total time: {elapsed_time:.2f}s ({elapsed_time/60:.1f} minutes)")
+        click.echo(f"  Performance: {rows_per_second:,.0f} rows/second")
+        click.echo(f"  Average per table: {total_inserted/total_tables:,.0f} rows")
+        
+    except Exception as e:
+        click.echo(f"❌ Error: {e}", err=True)
+        raise click.ClickException(str(e))
+    
+    finally:
+        if 'db_conn' in locals():
+            db_conn.close()
 
 
 @cli.command()

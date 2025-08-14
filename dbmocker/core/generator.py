@@ -128,7 +128,60 @@ class DataGenerator:
             if column_config:
                 logger.debug(f"Config for {column.name}: {column_config}")
         
-        # Handle possible_values first (highest priority constraint)
+        # Handle global duplicate setting FIRST (highest priority)
+        if self.config.duplicate_allowed and self._can_allow_duplicates(table, column.name):
+            # Apply global duplicate settings based on mode
+            if self.config.global_duplicate_mode == "allow_duplicates":
+                # Simple duplicate mode - use same value for all rows
+                cache_key = f"global_duplicate_{table.name}_{column.name}"
+                if not hasattr(self, '_global_duplicate_cache'):
+                    self._global_duplicate_cache = {}
+                
+                if cache_key not in self._global_duplicate_cache:
+                    # Generate the duplicate value once using basic type generation
+                    self._global_duplicate_cache[cache_key] = self._generate_by_type(column, column_config, table)
+                    logger.debug(f"Generated and cached global duplicate value for {column.name}: {self._global_duplicate_cache[cache_key]}")
+                
+                return self._global_duplicate_cache[cache_key]
+            
+            elif self.config.global_duplicate_mode == "smart_duplicates":
+                # Smart duplicates with global settings
+                return self._generate_smart_duplicate_value_global(column, table)
+        
+        elif self.config.duplicate_allowed:
+            logger.debug(f"Column {column.name} has constraints that prevent duplicates, generating unique value")
+        
+        # Handle column-specific duplicate mode (if no global setting applied)
+        if column_config and hasattr(column_config, 'duplicate_mode'):
+            duplicate_mode = column_config.duplicate_mode
+            
+            if duplicate_mode == "allow_duplicates":
+                if hasattr(column_config, 'duplicate_value') and column_config.duplicate_value is not None:
+                    # Use the specified duplicate value
+                    logger.debug(f"Using specified duplicate value for {column.name}: {column_config.duplicate_value}")
+                    return column_config.duplicate_value
+                elif self._can_allow_duplicates(table, column.name):
+                    # Generate one value and cache it for this column if constraints allow
+                    cache_key = f"duplicate_{table.name}_{column.name}"
+                    if not hasattr(self, '_duplicate_cache'):
+                        self._duplicate_cache = {}
+                    
+                    if cache_key not in self._duplicate_cache:
+                        # Generate the duplicate value once using basic type generation
+                        self._duplicate_cache[cache_key] = self._generate_by_type(column, column_config, table)
+                        logger.debug(f"Generated and cached duplicate value for {column.name}: {self._duplicate_cache[cache_key]}")
+                    
+                    return self._duplicate_cache[cache_key]
+                else:
+                    logger.warning(f"Column {column.name} has constraints that prevent duplicates, using generate_new mode")
+            
+            elif duplicate_mode == "smart_duplicates":
+                # Smart duplicates: generate limited set of values with controlled probability
+                return self._generate_smart_duplicate_value(column, column_config, table)
+        
+        # For generate_new mode or no duplicate config, continue with normal generation
+        
+        # Handle possible_values (second priority constraint)
         if column_config and column_config.possible_values:
             logger.debug(f"Using possible_values for {column.name}: {column_config.possible_values}")
             return random.choice(column_config.possible_values)
@@ -1351,3 +1404,162 @@ class DataGenerator:
             'state': lambda col: self.faker.state(),
             'zipcode': lambda col: self.faker.zipcode(),
         }
+    
+    def _is_primary_key_column(self, table: Optional[TableInfo], column_name: str) -> bool:
+        """Check if a column is a primary key."""
+        if table is None:
+            return False
+        pk_columns = table.get_primary_key_columns()
+        return column_name in pk_columns
+    
+    def _generate_smart_duplicate_value(self, column: ColumnInfo, 
+                                      config: ColumnGenerationConfig,
+                                      table: Optional[TableInfo] = None) -> Any:
+        """Generate values with controlled duplication for realistic data distribution."""
+        # Skip for primary keys and unique columns
+        if self._is_primary_key_column(table, column.name) or self._is_unique_column(table, column.name):
+            return self._generate_by_type(column, config, table)
+        
+        cache_key = f"smart_duplicate_{table.name}_{column.name}"
+        if not hasattr(self, '_smart_duplicate_cache'):
+            self._smart_duplicate_cache = {}
+        
+        if cache_key not in self._smart_duplicate_cache:
+            self._smart_duplicate_cache[cache_key] = {
+                'values': [],
+                'usage_count': {}
+            }
+        
+        cache = self._smart_duplicate_cache[cache_key]
+        
+        # Generate initial set of values if empty
+        max_values = getattr(config, 'max_duplicate_values', 10)
+        if len(cache['values']) < max_values:
+            new_value = self._generate_by_type(column, config, table)
+            cache['values'].append(new_value)
+            cache['usage_count'][new_value] = 0
+            logger.debug(f"Added new smart duplicate value for {column.name}: {new_value}")
+            return new_value
+        
+        # Use probability to decide between reusing and generating new
+        duplicate_prob = getattr(config, 'duplicate_probability', 0.5)
+        
+        if random.random() < duplicate_prob:
+            # Reuse existing value (prefer less used ones)
+            values_by_usage = sorted(cache['values'], key=lambda v: cache['usage_count'].get(v, 0))
+            selected_value = values_by_usage[0]  # Pick least used
+            cache['usage_count'][selected_value] += 1
+            logger.debug(f"Reusing smart duplicate value for {column.name}: {selected_value}")
+            return selected_value
+        else:
+            # Generate new value but limit total unique values
+            if len(cache['values']) < max_values:
+                new_value = self._generate_by_type(column, config, table)
+                cache['values'].append(new_value)
+                cache['usage_count'][new_value] = 1
+                logger.debug(f"Generated new smart duplicate value for {column.name}: {new_value}")
+                return new_value
+            else:
+                # Reuse random existing value
+                selected_value = random.choice(cache['values'])
+                cache['usage_count'][selected_value] += 1
+                logger.debug(f"Reusing random smart duplicate value for {column.name}: {selected_value}")
+                return selected_value
+    
+    def _generate_smart_duplicate_value_global(self, column: ColumnInfo, 
+                                             table: Optional[TableInfo] = None) -> Any:
+        """Generate values with controlled duplication using global configuration."""
+        # Skip for primary keys and unique columns
+        if self._is_primary_key_column(table, column.name) or self._is_unique_column(table, column.name):
+            column_config = None
+            return self._generate_by_type(column, column_config, table)
+        
+        cache_key = f"global_smart_duplicate_{table.name}_{column.name}"
+        if not hasattr(self, '_global_smart_duplicate_cache'):
+            self._global_smart_duplicate_cache = {}
+        
+        if cache_key not in self._global_smart_duplicate_cache:
+            self._global_smart_duplicate_cache[cache_key] = {
+                'values': [],
+                'usage_count': {}
+            }
+        
+        cache = self._global_smart_duplicate_cache[cache_key]
+        
+        # Generate initial set of values if empty
+        max_values = self.config.global_max_duplicate_values
+        if len(cache['values']) < max_values:
+            column_config = None
+            new_value = self._generate_by_type(column, column_config, table)
+            cache['values'].append(new_value)
+            cache['usage_count'][new_value] = 0
+            logger.debug(f"Added new global smart duplicate value for {column.name}: {new_value}")
+            return new_value
+        
+        # Use global probability to decide between reusing and generating new
+        duplicate_prob = self.config.global_duplicate_probability
+        
+        if random.random() < duplicate_prob:
+            # Reuse existing value (prefer less used ones)
+            values_by_usage = sorted(cache['values'], key=lambda v: cache['usage_count'].get(v, 0))
+            selected_value = values_by_usage[0]  # Pick least used
+            cache['usage_count'][selected_value] += 1
+            logger.debug(f"Reusing global smart duplicate value for {column.name}: {selected_value}")
+            return selected_value
+        else:
+            # Generate new value but limit total unique values
+            if len(cache['values']) < max_values:
+                column_config = None
+                new_value = self._generate_by_type(column, column_config, table)
+                cache['values'].append(new_value)
+                cache['usage_count'][new_value] = 1
+                logger.debug(f"Generated new global smart duplicate value for {column.name}: {new_value}")
+                return new_value
+            else:
+                # Reuse random existing value
+                selected_value = random.choice(cache['values'])
+                cache['usage_count'][selected_value] += 1
+                logger.debug(f"Reusing random global smart duplicate value for {column.name}: {selected_value}")
+                return selected_value
+    
+    def _is_unique_column(self, table: Optional[TableInfo], column_name: str) -> bool:
+        """Check if a column has a unique constraint."""
+        if table is None:
+            return False
+        
+        # Check for unique constraints on this column
+        for constraint in table.constraints:
+            if constraint.type == ConstraintType.UNIQUE and column_name in constraint.columns:
+                return True
+        return False
+    
+    def _can_allow_duplicates(self, table: Optional[TableInfo], column_name: str) -> bool:
+        """Check if a column can allow duplicate values based on its constraints."""
+        if table is None:
+            return True
+        
+        # Check if column is primary key
+        if self._is_primary_key_column(table, column_name):
+            logger.debug(f"Column {column_name} is primary key - duplicates not allowed")
+            return False
+        
+        # Check if column has unique constraint
+        if self._is_unique_column(table, column_name):
+            logger.debug(f"Column {column_name} has unique constraint - duplicates not allowed")
+            return False
+        
+        # Check for unique constraints on this column
+        for constraint in table.constraints:
+            if constraint.type == ConstraintType.UNIQUE and column_name in constraint.columns:
+                logger.debug(f"Column {column_name} is part of unique constraint - duplicates not allowed")
+                return False
+        
+        # Check if column has auto increment
+        column_info = table.get_column(column_name)
+        if column_info and column_info.is_auto_increment:
+            logger.debug(f"Column {column_name} is auto increment - duplicates not practical")
+            return False
+        
+        # Column can allow duplicates
+        logger.debug(f"Column {column_name} can allow duplicates")
+        return True

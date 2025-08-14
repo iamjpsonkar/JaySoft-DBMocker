@@ -182,8 +182,21 @@ class GenerationConfig(BaseModel):
     # Global settings
     batch_size: int = Field(default=1000, description="Batch size for bulk inserts")
     max_workers: int = Field(default=4, description="Number of worker threads")
+    enable_multiprocessing: bool = Field(default=False, description="Enable multiprocessing for large datasets")
+    max_processes: int = Field(default=2, description="Number of processes for multiprocessing")
+    rows_per_process: int = Field(default=100000, description="Rows per process threshold for multiprocessing")
     truncate_existing: bool = Field(default=False, description="Truncate existing data")
     seed: Optional[int] = Field(default=None, description="Random seed for reproducible data")
+    
+    # Global duplicate handling
+    duplicate_allowed: bool = Field(default=False, description="Allow duplicates for columns without constraints")
+    global_duplicate_mode: str = Field(default="generate_new", description="Global duplicate mode: 'generate_new', 'allow_duplicates', 'smart_duplicates'")
+    global_duplicate_probability: float = Field(default=0.5, description="Global probability for smart duplicates")
+    global_max_duplicate_values: int = Field(default=10, description="Global max unique values in smart duplicate mode")
+    
+    # Simple duplicate control
+    allow_duplicates: bool = Field(default=False, description="Allow duplicate values when column constraints permit")
+    duplicate_probability: float = Field(default=1.0, description="Probability of using duplicates when allowed (0.0-1.0)")
     
     # Table-specific settings
     table_configs: Dict[str, "TableGenerationConfig"] = Field(
@@ -220,6 +233,11 @@ class GenerationConfig(BaseModel):
     )
     pattern_sample_size: int = Field(
         default=1000, description="Sample size for existing data pattern analysis"
+    )
+    
+    # Global generation mode
+    global_generation_mode: str = Field(
+        default="generate_new_only", description="Global generation mode: 'generate_new_only' or 'duplicate_allowed'"
     )
     
     # Advanced generation options (GUI ENHANCEMENTS)
@@ -277,6 +295,15 @@ class ColumnGenerationConfig(BaseModel):
     
     # Null probability
     null_probability: float = Field(default=0.0, description="Probability of generating NULL")
+    
+    # Generation mode (PRIMARY FEATURE)
+    generation_mode: str = Field(default="generate_new_only", description="Generation mode: 'generate_new_only' or 'duplicate_allowed'")
+    
+    # Duplicate handling (ENHANCED FEATURE) - only applies when generation_mode is 'duplicate_allowed'
+    duplicate_mode: str = Field(default="allow_duplicates", description="Duplicate mode: 'allow_duplicates', 'smart_duplicates'")
+    duplicate_value: Optional[Any] = Field(default=None, description="Single value to use for all rows when allowing duplicates")
+    duplicate_probability: float = Field(default=0.5, description="Probability of generating duplicates in smart_duplicates mode")
+    max_duplicate_values: int = Field(default=10, description="Maximum number of different values to generate in smart_duplicates mode")
     
     # Custom generator
     generator_function: Optional[str] = None

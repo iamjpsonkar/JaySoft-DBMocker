@@ -16,11 +16,14 @@ from dbmocker.core.database import DatabaseConnection, DatabaseConfig
 from dbmocker.core.analyzer import SchemaAnalyzer
 from dbmocker.core.generator import DataGenerator
 from dbmocker.core.inserter import DataInserter
-from dbmocker.core.models import GenerationConfig, TableGenerationConfig
+from dbmocker.core.models import GenerationConfig, TableGenerationConfig, ColumnGenerationConfig
 from dbmocker.core.db_spec_analyzer import DatabaseSpecAnalyzer
 from dbmocker.core.spec_driven_generator import SpecificationDrivenGenerator
 from dbmocker.core.dependency_resolver import DependencyResolver, print_insertion_plan
 from dbmocker.core.smart_generator import DependencyAwareGenerator, create_optimal_generation_config
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 class ToolTip:
@@ -557,19 +560,21 @@ class DBMockerGUI:
                  foreground="gray").pack(side=tk.LEFT)
         
         # Table configuration tree
-        config_columns = ("selected", "table", "mode", "rows", "status")
+        config_columns = ("selected", "table", "mode", "duplicate_mode", "rows", "status")
         self.config_tree = ttk.Treeview(table_config_frame, columns=config_columns, show="headings", height=10)
         
         self.config_tree.heading("selected", text="☑️ Select")
         self.config_tree.heading("table", text="Table Name")
         self.config_tree.heading("mode", text="Data Mode")
+        self.config_tree.heading("duplicate_mode", text="Duplicate Mode")
         self.config_tree.heading("rows", text="Rows to Generate")
         self.config_tree.heading("status", text="Status")
         
-        self.config_tree.column("selected", width=80, anchor=tk.CENTER)
-        self.config_tree.column("table", width=160)
-        self.config_tree.column("mode", width=120)
-        self.config_tree.column("rows", width=110)
+        self.config_tree.column("selected", width=70, anchor=tk.CENTER)
+        self.config_tree.column("table", width=140)
+        self.config_tree.column("mode", width=100)
+        self.config_tree.column("duplicate_mode", width=110)
+        self.config_tree.column("rows", width=100)
         self.config_tree.column("status", width=100)
         
         # Scrollbar
@@ -588,6 +593,15 @@ class DBMockerGUI:
         # Bind clicks for interactions
         self.config_tree.bind("<Double-1>", self.toggle_table_mode)
         self.config_tree.bind("<Button-1>", self.handle_tree_click)
+        
+        # Add tooltip for duplicate mode column
+        ToolTip(self.config_tree, 
+               "Duplicate Mode Options:\n"
+               "• Generate New: Create unique values (default)\n"
+               "• Allow Duplicates: Single value for all rows\n"
+               "• Smart Duplicates: Limited set of values with controlled repetition\n\n"
+               "Double-click on Data Mode to toggle between Generate New/Use Existing\n"
+               "Double-click on Duplicate Mode to cycle through duplicate options")
     
     def setup_generation_tab(self):
         """Setup data generation tab."""
@@ -796,6 +810,7 @@ class DBMockerGUI:
                 "☐",  # Deselected by default for normal workflow
                 table.name,
                 "Generate New",  # Default mode
+                "Generate New",  # Default duplicate mode
                 self.default_rows_var.get(),
                 "Disabled"  # Disabled since not selected
             ))
@@ -812,7 +827,7 @@ class DBMockerGUI:
             values = list(self.config_tree.item(item, "values"))
             # Only apply to selected (checked) tables
             if values[0] == "☑️":  # Check if table is selected
-                values[3] = default_rows  # Row count is now index 3 (selected, table, mode, rows, status)
+                values[4] = default_rows  # Row count is now index 4 (selected, table, mode, duplicate_mode, rows, status)
                 self.config_tree.item(item, values=values)
                 selected_count += 1
         
@@ -852,27 +867,41 @@ class DBMockerGUI:
             self.update_selection_info()
     
     def toggle_table_mode(self, event):
-        """Toggle between 'Generate New' and 'Use Existing' for a table."""
+        """Toggle between data modes and duplicate modes for a table."""
         item = self.config_tree.selection()[0] if self.config_tree.selection() else None
         if not item:
             return
         
-        # Check if click was on the mode column
+        # Check which column was clicked
         column = self.config_tree.identify_column(event.x)
-        if column == "#3":  # Mode column (now index 3: selected, table, mode, rows, status)
-            values = list(self.config_tree.item(item, "values"))
-            current_mode = values[2]  # Mode is now at index 2
+        values = list(self.config_tree.item(item, "values"))
+        
+        if column == "#3":  # Data Mode column (selected, table, mode, duplicate_mode, rows, status)
+            current_mode = values[2]  # Mode is at index 2
             
-            # Toggle mode
+            # Toggle data mode
             if current_mode == "Generate New":
                 values[2] = "Use Existing"
-                values[3] = "0"  # Set rows to 0 for existing data
+                values[4] = "0"  # Set rows to 0 for existing data
             else:
                 values[2] = "Generate New"
-                values[3] = str(self.default_rows_var.get())  # Reset to default rows
+                values[4] = str(self.default_rows_var.get())  # Reset to default rows
             
             self.config_tree.item(item, values=values)
             self.update_selection_info()
+            
+        elif column == "#4":  # Duplicate Mode column
+            current_duplicate_mode = values[3]  # Duplicate mode is at index 3
+            
+            # Cycle through duplicate modes
+            if current_duplicate_mode == "Generate New":
+                values[3] = "Allow Duplicates"
+            elif current_duplicate_mode == "Allow Duplicates":
+                values[3] = "Smart Duplicates"
+            else:  # Smart Duplicates
+                values[3] = "Generate New"
+            
+            self.config_tree.item(item, values=values)
     
     def select_all_for_generation(self):
         """Set all tables to Generate New mode with default rows."""
@@ -880,9 +909,10 @@ class DBMockerGUI:
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
             values[0] = "☑️"  # Select checkbox
-            values[2] = "Generate New"  # Mode
-            values[3] = default_rows  # Rows
-            values[4] = "Ready"  # Status
+            values[2] = "Generate New"  # Data Mode
+            values[3] = "Generate New"  # Duplicate Mode
+            values[4] = default_rows  # Rows
+            values[5] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
@@ -891,9 +921,10 @@ class DBMockerGUI:
         for item in self.config_tree.get_children():
             values = list(self.config_tree.item(item, "values"))
             values[0] = "☑️"  # Select checkbox
-            values[2] = "Use Existing"  # Mode
-            values[3] = "0"  # Rows
-            values[4] = "Ready"  # Status
+            values[2] = "Use Existing"  # Data Mode
+            values[3] = "Generate New"  # Duplicate Mode (irrelevant for existing data)
+            values[4] = "0"  # Rows
+            values[5] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         self.update_selection_info()
     
@@ -933,18 +964,21 @@ class DBMockerGUI:
                 # Table has existing data - suggest using existing for small reference tables
                 if table_info.row_count < 100 and not dependencies.get(table_name, []):
                     # Small independent table with existing data - use existing
-                    values[2] = "Use Existing"  # Mode
-                    values[3] = "0"  # Rows
+                    values[2] = "Use Existing"  # Data Mode
+                    values[3] = "Generate New"  # Duplicate Mode (irrelevant for existing)
+                    values[4] = "0"  # Rows
                 else:
                     # Larger table or has dependencies - generate new
-                    values[2] = "Generate New"  # Mode
-                    values[3] = str(min(1000, table_info.row_count * 2))  # 2x existing data
+                    values[2] = "Generate New"  # Data Mode
+                    values[3] = "Generate New"  # Duplicate Mode
+                    values[4] = str(min(1000, table_info.row_count * 2))  # 2x existing data
             else:
                 # Empty table - generate new data
-                values[2] = "Generate New"  # Mode
-                values[3] = "500"  # Default for empty tables
+                values[2] = "Generate New"  # Data Mode
+                values[3] = "Generate New"  # Duplicate Mode
+                values[4] = "500"  # Default for empty tables
             
-            values[4] = "Ready"  # Status
+            values[5] = "Ready"  # Status
             self.config_tree.item(item, values=values)
         
         self.update_selection_info()
@@ -973,8 +1007,9 @@ class DBMockerGUI:
         for item in self.config_tree.get_children():
             values = self.config_tree.item(item, "values")
             selected = values[0] == "☑️"
-            mode = values[2]  # Mode is now at index 2
-            rows = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
+            mode = values[2]  # Data Mode at index 2
+            duplicate_mode = values[3] if len(values) > 3 else "Generate New"  # Duplicate Mode at index 3
+            rows = int(values[4]) if len(values) > 4 and values[4].isdigit() else 0  # Rows at index 4
             
             if selected:
                 selected_count += 1
@@ -1220,6 +1255,81 @@ class DBMockerGUI:
         ttk.Label(auto_config_frame, text="Auto-config analyzes your schema and creates optimal generation rules", 
                  font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
         
+        # Performance Options (NEW)
+        performance_frame = ttk.LabelFrame(scrollable_frame, text="⚡ Performance Settings", padding=10)
+        performance_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # Multi-threading options
+        threading_frame = ttk.Frame(performance_frame)
+        threading_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(threading_frame, text="Worker Threads:").pack(side=tk.LEFT)
+        self.max_workers_var = tk.StringVar(value="4")
+        ttk.Entry(threading_frame, textvariable=self.max_workers_var, width=10).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(threading_frame, text="(1-16 threads)").pack(side=tk.LEFT)
+        
+        # Multi-processing options
+        multiprocessing_frame = ttk.Frame(performance_frame)
+        multiprocessing_frame.pack(fill=tk.X, pady=5)
+        
+        self.enable_multiprocessing_var = tk.BooleanVar(value=False)
+        mp_checkbox = ttk.Checkbutton(multiprocessing_frame, text="🚀 Enable Multiprocessing for Large Datasets", 
+                       variable=self.enable_multiprocessing_var, command=self.toggle_multiprocessing_options)
+        mp_checkbox.pack(anchor=tk.W, pady=2)
+        ToolTip(mp_checkbox, "Enable multiprocessing for millions of records:\n• Dramatically improves performance\n• Uses multiple CPU cores\n• Recommended for >100K rows per table")
+        
+        # Multiprocessing settings (initially disabled)
+        self.mp_settings_frame = ttk.Frame(performance_frame)
+        self.mp_settings_frame.pack(fill=tk.X, pady=5)
+        
+        mp_processes_frame = ttk.Frame(self.mp_settings_frame)
+        mp_processes_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(mp_processes_frame, text="  Max Processes:").pack(side=tk.LEFT)
+        self.max_processes_var = tk.StringVar(value="2")
+        self.max_processes_entry = ttk.Entry(mp_processes_frame, textvariable=self.max_processes_var, width=10)
+        self.max_processes_entry.pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(mp_processes_frame, text="processes").pack(side=tk.LEFT)
+        
+        mp_threshold_frame = ttk.Frame(self.mp_settings_frame)
+        mp_threshold_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(mp_threshold_frame, text="  Rows per Process:").pack(side=tk.LEFT)
+        self.rows_per_process_var = tk.StringVar(value="100000")
+        self.rows_per_process_entry = ttk.Entry(mp_threshold_frame, textvariable=self.rows_per_process_var, width=10)
+        self.rows_per_process_entry.pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Label(mp_threshold_frame, text="rows threshold").pack(side=tk.LEFT)
+        
+        # Initially disable multiprocessing settings
+        self.toggle_multiprocessing_options()
+        
+        # Duplicate Options (NEW)
+        duplicate_frame = ttk.LabelFrame(scrollable_frame, text="🔄 Duplicate Data Options", padding=10)
+        duplicate_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        self.enable_duplicates_var = tk.BooleanVar(value=False)
+        duplicate_checkbox = ttk.Checkbutton(duplicate_frame, text="🔄 Allow Duplicate Values for Specific Columns", 
+                       variable=self.enable_duplicates_var, command=self.toggle_duplicate_options)
+        duplicate_checkbox.pack(anchor=tk.W, pady=2)
+        ToolTip(duplicate_checkbox, "Enable duplicate value generation:\n• Useful for testing duplicate scenarios\n• Applies to non-unique, non-PK columns\n• Generates same value for all rows")
+        
+        ttk.Label(duplicate_frame, text="Use when testing duplicate handling or need consistent values across rows", 
+                 font=("Arial", 9), foreground="gray").pack(anchor=tk.W, pady=(0, 5))
+        
+        # Duplicate column selection (initially disabled)
+        self.duplicate_settings_frame = ttk.Frame(duplicate_frame)
+        self.duplicate_settings_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(self.duplicate_settings_frame, text="  Columns for Duplicates:").pack(anchor=tk.W)
+        self.duplicate_columns_var = tk.StringVar()
+        self.duplicate_columns_entry = ttk.Entry(self.duplicate_settings_frame, textvariable=self.duplicate_columns_var, width=50)
+        self.duplicate_columns_entry.pack(fill=tk.X, pady=2)
+        ttk.Label(self.duplicate_settings_frame, text="  Format: table.column, table.column (e.g., users.status, orders.priority)", 
+                 font=("Arial", 8), foreground="gray").pack(anchor=tk.W)
+        
+        # Initially disable duplicate settings
+        self.toggle_duplicate_options()
+
         # Advanced Generation Options
         advanced_gen_frame = ttk.LabelFrame(scrollable_frame, text="🚀 Advanced Generation Modes", padding=10)
         advanced_gen_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1285,6 +1395,30 @@ class DBMockerGUI:
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    def toggle_multiprocessing_options(self):
+        """Toggle multiprocessing settings visibility."""
+        if self.enable_multiprocessing_var.get():
+            # Enable multiprocessing options
+            for child in self.mp_settings_frame.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, ttk.Entry):
+                        subchild.config(state=tk.NORMAL)
+        else:
+            # Disable multiprocessing options
+            for child in self.mp_settings_frame.winfo_children():
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, ttk.Entry):
+                        subchild.config(state=tk.DISABLED)
+    
+    def toggle_duplicate_options(self):
+        """Toggle duplicate settings visibility."""
+        if self.enable_duplicates_var.get():
+            # Enable duplicate options
+            self.duplicate_columns_entry.config(state=tk.NORMAL)
+        else:
+            # Disable duplicate options
+            self.duplicate_columns_entry.config(state=tk.DISABLED)
     
     def setup_done_button(self):
         """Setup the Done button at the bottom of the window."""
@@ -1726,8 +1860,13 @@ Enterprise-grade mock data generation for professional development.'''
                     # Create specification-driven generator
                     spec_generator = SpecificationDrivenGenerator(self.db_connection, table_specs)
                 else:
-                    # Use legacy generator
-                    generator = DataGenerator(self.schema, config)
+                    # Use enhanced generator if parallel processing is enabled
+                    if use_parallel:
+                        from dbmocker.core.parallel_generator import ParallelDataGenerator
+                        generator = ParallelDataGenerator(self.schema, config, self.db_connection)
+                        self.result_queue.put(("progress", "🚀 Using parallel data generator"))
+                    else:
+                        generator = DataGenerator(self.schema, config)
                     table_specs = None
                     spec_generator = None
                 
@@ -1747,6 +1886,9 @@ Enterprise-grade mock data generation for professional development.'''
                             self.result_queue.put(("progress", f"✅ Auto-configuration applied to {len(auto_config.table_configs)} tables"))
                     except Exception as e:
                         self.result_queue.put(("progress", f"⚠️ Auto-configuration failed: {e}"))
+                
+                # Determine if we should use parallel processing
+                use_parallel = config.enable_multiprocessing or config.max_workers > 1
                 
                 # Create inserter based on mode
                 if self.spec_driven_var.get() and table_specs:
@@ -1783,10 +1925,20 @@ Enterprise-grade mock data generation for professional development.'''
                         tables=enhanced_tables
                     )
                     
-                    inserter = DataInserter(self.db_connection, enhanced_schema)
+                    if use_parallel:
+                        from dbmocker.core.parallel_generator import ParallelDataInserter
+                        inserter = ParallelDataInserter(self.db_connection, enhanced_schema)
+                        self.result_queue.put(("progress", "🚀 Using parallel inserter with enhanced schema"))
+                    else:
+                        inserter = DataInserter(self.db_connection, enhanced_schema)
                 else:
                     # Use legacy mode
-                    inserter = DataInserter(self.db_connection, self.schema)
+                    if use_parallel:
+                        from dbmocker.core.parallel_generator import ParallelDataInserter
+                        inserter = ParallelDataInserter(self.db_connection, self.schema)
+                        self.result_queue.put(("progress", "🚀 Using parallel inserter"))
+                    else:
+                        inserter = DataInserter(self.db_connection, self.schema)
                 
                 # Collect table configurations from GUI and validate against schema
                 table_configs = {}
@@ -1882,8 +2034,13 @@ Enterprise-grade mock data generation for professional development.'''
                                 if self.truncate_var.get():
                                     inserter.truncate_table(table_name)
                                 
-                                # Insert data using table name (not mock table object)
-                                rows_inserted = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
+                                # Use parallel insertion if available
+                                if hasattr(inserter, 'insert_data_parallel') and use_parallel:
+                                    rows_inserted = inserter.insert_data_parallel(
+                                        table_name, data, int(self.batch_size_var.get()), config.max_workers
+                                    )
+                                else:
+                                    rows_inserted = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
                                 total_inserted += rows_inserted.total_rows_generated
                             
                             self.result_queue.put(("table_complete", {
@@ -1902,8 +2059,11 @@ Enterprise-grade mock data generation for professional development.'''
                             
                             self.result_queue.put(("progress", f"Generating data for {table_name}..."))
                             
-                            # Generate data using legacy approach
-                            data = generator.generate_data_for_table(table_name, rows_to_generate)
+                            # Generate data using enhanced generator if available
+                            if hasattr(generator, 'generate_data_for_table_parallel') and use_parallel:
+                                data = generator.generate_data_for_table_parallel(table_name, rows_to_generate)
+                            else:
+                                data = generator.generate_data_for_table(table_name, rows_to_generate)
                             total_generated += len(data)
                             
                             # Insert data (if not dry run)
@@ -1911,7 +2071,13 @@ Enterprise-grade mock data generation for professional development.'''
                                 if self.truncate_var.get():
                                     inserter.truncate_table(table_name)
                                 
-                                stats = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
+                                # Use parallel insertion if available
+                                if hasattr(inserter, 'insert_data_parallel') and use_parallel:
+                                    stats = inserter.insert_data_parallel(
+                                        table_name, data, int(self.batch_size_var.get()), config.max_workers
+                                    )
+                                else:
+                                    stats = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
                                 total_inserted += stats.total_rows_generated
                             
                             self.result_queue.put(("table_complete", {
@@ -1953,34 +2119,86 @@ Enterprise-grade mock data generation for professional development.'''
         """Build generation configuration from GUI settings."""
         use_existing_tables = []
         
+        # Get performance settings
+        max_workers = int(self.max_workers_var.get()) if hasattr(self, 'max_workers_var') and self.max_workers_var.get().isdigit() else 4
+        enable_multiprocessing = getattr(self, 'enable_multiprocessing_var', tk.BooleanVar()).get()
+        max_processes = int(self.max_processes_var.get()) if hasattr(self, 'max_processes_var') and self.max_processes_var.get().isdigit() else 2
+        rows_per_process = int(self.rows_per_process_var.get()) if hasattr(self, 'rows_per_process_var') and self.rows_per_process_var.get().isdigit() else 100000
+        
         config = GenerationConfig(
             batch_size=int(self.batch_size_var.get()) if self.batch_size_var.get() else 1000,
+            max_workers=max_workers,
+            enable_multiprocessing=enable_multiprocessing,
+            max_processes=max_processes,
+            rows_per_process=rows_per_process,
             seed=int(self.seed_var.get()) if self.seed_var.get() else None,
             truncate_existing=self.truncate_var.get(),
             use_existing_tables=use_existing_tables
         )
         
+        # Parse duplicate column configuration
+        duplicate_config = {}
+        if hasattr(self, 'enable_duplicates_var') and self.enable_duplicates_var.get():
+            duplicate_columns_text = getattr(self, 'duplicate_columns_var', tk.StringVar()).get().strip()
+            if duplicate_columns_text:
+                for entry in duplicate_columns_text.split(','):
+                    entry = entry.strip()
+                    if '.' in entry:
+                        table_name, column_name = entry.split('.', 1)
+                        table_name, column_name = table_name.strip(), column_name.strip()
+                        if table_name not in duplicate_config:
+                            duplicate_config[table_name] = []
+                        duplicate_config[table_name].append(column_name)
+
         # Add table configurations (only for selected tables)
         for item in self.config_tree.get_children():
             values = self.config_tree.item(item, "values")
             selected = values[0] == "☑️"
-            table_name = values[1]  # Table name is now at index 1
-            mode = values[2]  # Mode is now at index 2
-            rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
+            table_name = values[1]  # Table name at index 1
+            mode = values[2]  # Data Mode at index 2
+            duplicate_mode = values[3] if len(values) > 3 else "Generate New"  # Duplicate Mode at index 3
+            rows_to_generate = int(values[4]) if len(values) > 4 and values[4].isdigit() else 0  # Rows at index 4
             
             # Only include selected tables
             if selected:
+                # Create table config
                 if mode == "Use Existing":
                     use_existing_tables.append(table_name)
-                    config.table_configs[table_name] = TableGenerationConfig(
+                    table_config = TableGenerationConfig(
                         rows_to_generate=0,
                         use_existing_data=True
                     )
                 else:
-                    config.table_configs[table_name] = TableGenerationConfig(
+                    table_config = TableGenerationConfig(
                         rows_to_generate=rows_to_generate,
                         use_existing_data=False
                     )
+                
+                # Add duplicate mode configurations from GUI
+                if duplicate_mode and duplicate_mode != "Generate New":
+                    # Apply duplicate mode to common columns that benefit from duplication
+                    common_duplicate_columns = ['status', 'category', 'type', 'state', 'priority', 'region', 'department']
+                    
+                    for common_col in common_duplicate_columns:
+                        if duplicate_mode == "Allow Duplicates":
+                            table_config.column_configs[common_col] = ColumnGenerationConfig(
+                                duplicate_mode="allow_duplicates"
+                            )
+                        elif duplicate_mode == "Smart Duplicates":
+                            table_config.column_configs[common_col] = ColumnGenerationConfig(
+                                duplicate_mode="smart_duplicates",
+                                duplicate_probability=0.7,
+                                max_duplicate_values=5
+                            )
+                
+                # Add duplicate column configurations from old method (backward compatibility)
+                if table_name in duplicate_config:
+                    for column_name in duplicate_config[table_name]:
+                        table_config.column_configs[column_name] = ColumnGenerationConfig(
+                            duplicate_mode="allow_duplicates"
+                        )
+                
+                config.table_configs[table_name] = table_config
         
         return config
     
