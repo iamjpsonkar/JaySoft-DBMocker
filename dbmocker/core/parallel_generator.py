@@ -89,7 +89,8 @@ class ParallelDataGenerator:
             return []
         
         start_time = time.time()
-        logger.info(f"Starting parallel generation for {table_name}: {num_rows:,} rows")
+        logger.info(f"🚀 Starting parallel generation for {table_name}: {num_rows:,} rows")
+        logger.info(f"🔧 System config: {self._adaptive_config['cpu_count']} CPUs, {self._adaptive_config['memory_gb']:.1f}GB RAM")
         
         # Determine optimal processing strategy
         use_multiprocessing = (
@@ -98,20 +99,26 @@ class ParallelDataGenerator:
             self._adaptive_config['max_processes'] > 1
         )
         
+        logger.info(f"🎯 Processing strategy: {'Multi-processing' if use_multiprocessing else 'Multi-threading'}")
+        logger.info(f"👥 Max workers: {self._adaptive_config['max_processes']} processes" if use_multiprocessing else f"🧵 Max workers: {self.config.max_workers} threads")
+        
         # Memory check for very large datasets
         estimated_memory_mb = self._estimate_memory_usage(table, num_rows)
         available_memory_mb = psutil.virtual_memory().available / (1024**2)
         
-        logger.info(f"Memory estimate: {estimated_memory_mb:.1f}MB, Available: {available_memory_mb:.1f}MB")
+        logger.info(f"💾 Memory estimate: {estimated_memory_mb:.1f}MB, Available: {available_memory_mb:.1f}MB")
         
         if estimated_memory_mb > available_memory_mb * 0.8:
-            logger.warning("Large dataset detected, using streaming generation")
+            logger.warning("⚠️ Large dataset detected, using streaming generation for memory efficiency")
             return self._generate_with_streaming(table, num_rows)
         elif use_multiprocessing:
+            logger.info(f"🔀 Using multi-processing generation with {self._adaptive_config['max_processes']} processes")
             return self._generate_with_multiprocessing(table, num_rows)
         elif num_rows >= 10000 and self.config.max_workers > 1:
+            logger.info(f"🧵 Using multi-threading generation with {self.config.max_workers} threads")
             return self._generate_with_multithreading(table, num_rows)
         else:
+            logger.info(f"🔄 Using single-threaded generation (rows: {num_rows:,} < 10K threshold)")
             # Use single-threaded generation for smaller datasets
             return self._generate_single_threaded(table, num_rows)
     
@@ -202,11 +209,13 @@ class ParallelDataGenerator:
     
     def _generate_with_multithreading(self, table: TableInfo, num_rows: int) -> List[Dict[str, Any]]:
         """Generate data using multithreading for medium datasets."""
-        logger.info(f"Using multithreading with {self.config.max_workers} threads for {num_rows:,} rows")
+        logger.info(f"🧵 Using multithreading with {self.config.max_workers} threads for {num_rows:,} rows")
         
         # Calculate rows per thread
         rows_per_thread = max(1, num_rows // self.config.max_workers)
         tasks = []
+        
+        logger.info(f"📦 Distributing work: {rows_per_thread:,} rows per thread")
         
         # Create generation tasks
         for i in range(self.config.max_workers):
@@ -219,6 +228,9 @@ class ParallelDataGenerator:
             
             if start_row >= num_rows:
                 break
+                
+            thread_rows = end_row - start_row
+            logger.debug(f"🧵 Thread {i+1}: Processing rows {start_row:,} to {end_row:,} ({thread_rows:,} rows)")
                 
             # Create unique seed for each thread
             thread_seed = None
@@ -236,6 +248,10 @@ class ParallelDataGenerator:
         
         # Process tasks in parallel
         all_data = []
+        completed_tasks = 0
+        total_tasks = len(tasks)
+        
+        logger.info(f"🚀 Starting {total_tasks} worker threads")
         
         with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
             # Submit tasks
@@ -249,12 +265,18 @@ class ParallelDataGenerator:
                 ): task for task in tasks
             }
             
-            # Collect results
+            # Collect results with progress tracking
             for future in as_completed(future_to_task):
                 task = future_to_task[future]
                 try:
                     result = future.result(timeout=120)  # 2 minute timeout per thread
                     all_data.extend(result)
+                    completed_tasks += 1
+                    
+                    progress_pct = (completed_tasks / total_tasks) * 100
+                    task_rows = task.end_row - task.start_row
+                    logger.info(f"✅ Thread {task.task_id}: Completed {len(result):,} rows ({progress_pct:.1f}% workers done)")
+                    logger.debug(f"🧵 Thread {task.task_id}: Processed {task_rows:,} rows successfully")
                     logger.info(f"Thread {task.task_id} completed: {len(result)} rows")
                 except Exception as e:
                     logger.error(f"Thread {task.task_id} failed: {e}")
@@ -413,15 +435,35 @@ def _generate_data_worker_process(schema: DatabaseSchema, config: GenerationConf
 def _generate_data_worker_thread(schema: DatabaseSchema, config: GenerationConfig,
                                 db_connection: DatabaseConnection, task: GenerationTask) -> List[Dict[str, Any]]:
     """Worker function for multithreading data generation."""
+    import threading
+    import time
+    
+    thread_id = threading.current_thread().ident
+    start_time = time.time()
+    num_rows = task.end_row - task.start_row
+    
+    logger.info(f"🧵 Worker {task.task_id} (TID: {thread_id}): Starting generation of {num_rows:,} rows for {task.table_name}")
+    
     # Create generator with task-specific seed
     task_config = GenerationConfig(**config.dict())
     task_config.seed = task.seed
     
+    if task.seed:
+        logger.debug(f"🎲 Worker {task.task_id}: Using seed {task.seed} for reproducible generation")
+    
     generator = EnhancedDataGenerator(schema, task_config, db_connection)
     
     # Generate data for the specified range
-    num_rows = task.end_row - task.start_row
-    return generator.generate_data_for_table(task.table_name, num_rows)
+    result = generator.generate_data_for_table(task.table_name, num_rows)
+    
+    # Calculate performance metrics
+    end_time = time.time()
+    duration = end_time - start_time
+    rows_per_second = len(result) / duration if duration > 0 else 0
+    
+    logger.info(f"✅ Worker {task.task_id} (TID: {thread_id}): Generated {len(result):,} rows in {duration:.2f}s ({rows_per_second:,.0f} rows/sec)")
+    
+    return result
 
 
 class EnhancedDataGenerator(DataGenerator):
