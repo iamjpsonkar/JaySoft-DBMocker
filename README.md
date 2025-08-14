@@ -484,6 +484,31 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 -   **Tkinter** - For the graphical user interface
 -   **pytest** - For the testing framework
 
+## 🧹 Repository Cleanup
+
+Keep your development environment clean with the included cleanup script:
+
+```bash
+# See what files would be removed
+python cleanup.py --dry-run
+
+# Clean up cache files, logs, and temporary files
+python cleanup.py
+
+# Force cleanup without confirmation (useful for CI/CD)
+python cleanup.py --force
+```
+
+The cleanup script removes:
+- Python cache files (`__pycache__/`, `*.pyc`)
+- Build artifacts (`*.egg-info/`, `dist/`)
+- Demo databases (`*.db`, `*.sqlite`)
+- Configuration files (`*_config.yaml`)
+- Log files (`*.log`)
+- OS-generated files (`.DS_Store`, `Thumbs.db`)
+
+For detailed usage instructions, see [docs/CLEANUP.md](docs/CLEANUP.md).
+
 ## 📬 Support
 
 -   **Documentation**: [https://iamjpsonkar.github.io/JaySoft-DBMocker](https://iamjpsonkar.github.io/JaySoft-DBMocker)
