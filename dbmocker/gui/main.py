@@ -86,6 +86,9 @@ class DBMockerGUI:
         # Set application icon if available
         self.set_application_icon()
         
+        # Configure window close behavior
+        self.root.protocol("WM_DELETE_WINDOW", self.close_application)
+        
         # Application state
         self.db_connection: Optional[DatabaseConnection] = None
         self.schema = None
@@ -181,6 +184,9 @@ class DBMockerGUI:
         self.logs_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.logs_frame, text="Logs")
         self.setup_logs_tab()
+        
+        # Add Done button at the bottom
+        self.setup_done_button()
     
     def setup_connection_tab(self):
         """Setup database connection tab."""
@@ -709,6 +715,96 @@ class DBMockerGUI:
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
+    
+    def setup_done_button(self):
+        """Setup the Done button at the bottom of the window."""
+        # Create a frame for the bottom buttons
+        bottom_frame = ttk.Frame(self.root)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(0, 10))
+        
+        # Add separator line
+        separator = ttk.Separator(bottom_frame, orient='horizontal')
+        separator.pack(fill=tk.X, pady=(0, 10))
+        
+        # Button frame for proper alignment
+        button_frame = ttk.Frame(bottom_frame)
+        button_frame.pack(side=tk.RIGHT)
+        
+        # Done button
+        self.done_button = ttk.Button(button_frame, text="✅ Done", 
+                                     command=self.close_application, 
+                                     style="Accent.TButton")
+        self.done_button.pack(side=tk.RIGHT, padx=(0, 5))
+        
+        # Add tooltip
+        ToolTip(self.done_button, "Close JaySoft:DBMocker application:\n• Safely terminates all connections\n• Stops any running operations\n• Exits the application")
+        
+        # Add about button for additional info
+        self.about_button = ttk.Button(button_frame, text="ℹ️ About", 
+                                      command=self.show_about_dialog)
+        self.about_button.pack(side=tk.RIGHT, padx=(0, 10))
+        
+        ToolTip(self.about_button, "Show application information:\n• Version details\n• Platform information\n• Credits and support")
+    
+    def close_application(self):
+        """Close the application gracefully."""
+        try:
+            # Ask for confirmation if operations are running
+            if hasattr(self, 'generation_thread') and self.generation_thread and self.generation_thread.is_alive():
+                result = messagebox.askyesno(
+                    "Confirm Exit", 
+                    "Data generation is currently running.\n\nAre you sure you want to exit?\nThis will stop the current operation.",
+                    icon='warning'
+                )
+                if not result:
+                    return
+            
+            # Close database connection if exists
+            if hasattr(self, 'db_connection') and self.db_connection:
+                try:
+                    self.db_connection.close()
+                except Exception as e:
+                    pass  # Continue closing even if connection close fails
+            
+            # Destroy the main window
+            self.root.quit()
+            self.root.destroy()
+            
+        except Exception as e:
+            # Force close even if there are errors
+            try:
+                self.root.quit()
+            except:
+                pass
+            try:
+                self.root.destroy()
+            except:
+                pass
+    
+    def show_about_dialog(self):
+        """Show application about dialog."""
+        about_text = f'''JaySoft:DBMocker
+Database Mock Data Generator
+
+Version: 2.0.0
+Platform: {platform.system()} {platform.release()}
+Python: {platform.python_version()}
+Architecture: {platform.machine()}
+
+🎯 Features:
+• Pattern-based realistic data generation
+• Smart dependency-aware insertion
+• Specification-driven generation
+• Cross-platform GUI and CLI support
+• Advanced constraint handling
+
+👨‍💻 Developed by: JaySoft Development
+📧 Support: Contact through GitHub repository
+🌐 Repository: github.com/iamjpsonkar/JaySoft-DBMocker
+
+Enterprise-grade mock data generation for professional development.'''
+        
+        messagebox.showinfo("About JaySoft:DBMocker", about_text)
     
     def toggle_seed_entry(self):
         """Toggle seed entry based on checkbox."""
