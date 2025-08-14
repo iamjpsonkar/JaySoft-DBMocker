@@ -555,6 +555,15 @@ def smart_generate(driver, host, port, database, username, password, rows, batch
         # Create smart generator
         smart_generator = DependencyAwareGenerator(schema, generation_config, db_conn)
         
+        # Analyze and report FK dependencies for table selection
+        fk_dependencies = smart_generator.analyze_fk_dependencies_for_selection()
+        if fk_dependencies:
+            click.echo(f"\n🔗 FK Dependencies Analysis:")
+            click.echo(f"  Selected tables with FK references to unselected tables:")
+            for selected_table, referenced_tables in fk_dependencies.items():
+                click.echo(f"    • {selected_table} → {', '.join(referenced_tables)}")
+            click.echo(f"  ✅ Will automatically use existing data from referenced tables")
+        
         # Show generation plan
         batches = insertion_plan.get_insertion_batches()
         total_tables = len([t for batch in batches for t in batch])

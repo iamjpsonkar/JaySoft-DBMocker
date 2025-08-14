@@ -194,8 +194,12 @@ class DBMockerGUI:
     def setup_gui(self):
         """Setup the GUI layout."""
         # Create main notebook for tabs
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Main container with border
+        main_container = ttk.Frame(self.root, relief='ridge', borderwidth=3)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        
+        self.notebook = ttk.Notebook(main_container)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Connection tab
         self.connection_frame = ttk.Frame(self.notebook)
@@ -232,12 +236,12 @@ class DBMockerGUI:
     
     def setup_connection_tab(self):
         """Setup database connection tab."""
-        main_frame = ttk.Frame(self.connection_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame = ttk.Frame(self.connection_frame, relief='solid', borderwidth=1)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Logo and Title
-        logo_frame = ttk.Frame(main_frame)
-        logo_frame.pack(pady=(0, 20))
+        logo_frame = ttk.LabelFrame(main_frame, text="JaySoft-DBMocker", relief='groove', borderwidth=2)
+        logo_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
         
         # Try to load and display logo
         try:
@@ -257,8 +261,8 @@ class DBMockerGUI:
         title_label.pack()
         
         # Connection form
-        form_frame = ttk.LabelFrame(main_frame, text="Connection Details", padding=20)
-        form_frame.pack(fill=tk.X, pady=(0, 20))
+        form_frame = ttk.LabelFrame(main_frame, text="📊 Connection Details", padding=20, relief='ridge', borderwidth=2)
+        form_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
         
         # Database driver
         ttk.Label(form_frame, text="Database Type:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -319,8 +323,8 @@ class DBMockerGUI:
         form_frame.columnconfigure(1, weight=1)
         
         # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X)
+        button_frame = ttk.LabelFrame(main_frame, text="🔧 Actions", padding=15, relief='ridge', borderwidth=2)
+        button_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
         
         self.connect_button = ttk.Button(button_frame, text="Connect & List Databases", 
                                         command=self.test_connection)
@@ -338,8 +342,8 @@ class DBMockerGUI:
     
     def setup_schema_tab(self):
         """Setup schema analysis tab."""
-        main_frame = ttk.Frame(self.schema_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame = ttk.Frame(self.schema_frame, relief='solid', borderwidth=1)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Title
         title_label = ttk.Label(main_frame, text="Database Schema", 
@@ -347,8 +351,8 @@ class DBMockerGUI:
         title_label.pack(pady=(0, 20))
         
         # Table list
-        table_frame = ttk.LabelFrame(main_frame, text="Tables", padding=10)
-        table_frame.pack(fill=tk.BOTH, expand=True)
+        table_frame = ttk.LabelFrame(main_frame, text="📋 Database Tables", padding=15, relief='ridge', borderwidth=2)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # Treeview for tables
         columns = ("name", "rows", "columns", "foreign_keys")
@@ -378,8 +382,8 @@ class DBMockerGUI:
     
     def setup_config_tab(self):
         """Setup generation configuration tab."""
-        main_frame = ttk.Frame(self.config_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame = ttk.Frame(self.config_frame, relief='solid', borderwidth=1)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Title
         title_label = ttk.Label(main_frame, text="Generation Configuration", 
@@ -387,8 +391,8 @@ class DBMockerGUI:
         title_label.pack(pady=(0, 20))
         
         # Global settings
-        global_frame = ttk.LabelFrame(main_frame, text="Global Settings", padding=20)
-        global_frame.pack(fill=tk.X, pady=(0, 20))
+        global_frame = ttk.LabelFrame(main_frame, text="🌐 Global Settings", padding=20, relief='ridge', borderwidth=2)
+        global_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
         
         # Batch size
         ttk.Label(global_frame, text="Batch Size:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -406,8 +410,8 @@ class DBMockerGUI:
                        variable=self.truncate_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
         
         # Table-specific settings
-        table_config_frame = ttk.LabelFrame(main_frame, text="Table Configuration", padding=20)
-        table_config_frame.pack(fill=tk.BOTH, expand=True)
+        table_config_frame = ttk.LabelFrame(main_frame, text="📋 Table Configuration", padding=20, relief='ridge', borderwidth=2)
+        table_config_frame.pack(fill=tk.BOTH, expand=True, padx=10)
         
         # Table selection and row count
         control_frame = ttk.Frame(table_config_frame)
@@ -419,6 +423,32 @@ class DBMockerGUI:
         
         ttk.Button(control_frame, text="Apply to All Tables", 
                   command=self.apply_default_rows).pack(side=tk.RIGHT)
+        
+        # Bulk selection controls
+        bulk_frame = ttk.LabelFrame(table_config_frame, text="🚀 Bulk Operations", padding=10, relief='groove', borderwidth=1)
+        bulk_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(bulk_frame, text="Bulk Operations:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
+        
+        ttk.Button(bulk_frame, text="📋 Select All for Generation", 
+                  command=self.select_all_for_generation).pack(side=tk.LEFT, padx=(10, 5))
+        
+        ttk.Button(bulk_frame, text="🔄 Select All for Existing", 
+                  command=self.select_all_for_existing).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(bulk_frame, text="❌ Clear All Selections", 
+                  command=self.clear_all_selections).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(bulk_frame, text="🎯 Smart Selection", 
+                  command=self.smart_table_selection).pack(side=tk.RIGHT)
+        
+        # Selection info
+        selection_info_frame = ttk.Frame(table_config_frame)
+        selection_info_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.selection_info_var = tk.StringVar(value="No tables configured")
+        ttk.Label(selection_info_frame, textvariable=self.selection_info_var, 
+                 foreground="gray").pack(side=tk.LEFT)
         
         # Table configuration tree
         config_columns = ("table", "mode", "rows", "status")
@@ -445,8 +475,8 @@ class DBMockerGUI:
     
     def setup_generation_tab(self):
         """Setup data generation tab."""
-        main_frame = ttk.Frame(self.generation_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame = ttk.Frame(self.generation_frame, relief='solid', borderwidth=1)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Title
         title_label = ttk.Label(main_frame, text="Data Generation", 
@@ -454,8 +484,8 @@ class DBMockerGUI:
         title_label.pack(pady=(0, 20))
         
         # Controls
-        controls_frame = ttk.Frame(main_frame)
-        controls_frame.pack(fill=tk.X, pady=(0, 20))
+        controls_frame = ttk.LabelFrame(main_frame, text="🎮 Generation Controls", padding=15, relief='ridge', borderwidth=2)
+        controls_frame.pack(fill=tk.X, pady=(0, 15), padx=10)
         
         self.generate_button = ttk.Button(controls_frame, text="🎲 Generate Data", 
                                          command=self.start_generation, state=tk.DISABLED)
@@ -626,6 +656,9 @@ class DBMockerGUI:
                 self.default_rows_var.get(),
                 "Ready"
             ))
+        
+        # Update selection info
+        self.update_selection_info()
     
     def apply_default_rows(self):
         """Apply default row count to all tables."""
@@ -657,10 +690,224 @@ class DBMockerGUI:
             
             self.config_tree.item(item, values=values)
     
+    def select_all_for_generation(self):
+        """Set all tables to Generate New mode with default rows."""
+        default_rows = self.default_rows_var.get()
+        for item in self.config_tree.get_children():
+            values = list(self.config_tree.item(item, "values"))
+            values[1] = "Generate New"
+            values[2] = default_rows
+            values[3] = "Ready"
+            self.config_tree.item(item, values=values)
+        self.update_selection_info()
+    
+    def select_all_for_existing(self):
+        """Set all tables to Use Existing mode."""
+        for item in self.config_tree.get_children():
+            values = list(self.config_tree.item(item, "values"))
+            values[1] = "Use Existing"
+            values[2] = "0"
+            values[3] = "Ready"
+            self.config_tree.item(item, values=values)
+        self.update_selection_info()
+    
+    def clear_all_selections(self):
+        """Set all tables to Generate New mode with 0 rows (effectively no generation)."""
+        for item in self.config_tree.get_children():
+            values = list(self.config_tree.item(item, "values"))
+            values[1] = "Generate New"
+            values[2] = "0"
+            values[3] = "Ready"
+            self.config_tree.item(item, values=values)
+        self.update_selection_info()
+    
+    def smart_table_selection(self):
+        """Apply smart defaults based on table characteristics."""
+        if not hasattr(self, 'schema') or not self.schema:
+            tk.messagebox.showwarning("No Schema", "Please analyze the database schema first.")
+            return
+        
+        # Get table dependencies and existing data
+        dependencies = self.schema.get_table_dependencies()
+        
+        for item in self.config_tree.get_children():
+            values = list(self.config_tree.item(item, "values"))
+            table_name = values[0]
+            
+            # Find table info
+            table_info = next((t for t in self.schema.tables if t.name == table_name), None)
+            if not table_info:
+                continue
+            
+            # Smart selection logic
+            if table_info.row_count > 0:
+                # Table has existing data - suggest using existing for small reference tables
+                if table_info.row_count < 100 and not dependencies.get(table_name, []):
+                    # Small independent table with existing data - use existing
+                    values[1] = "Use Existing"
+                    values[2] = "0"
+                else:
+                    # Larger table or has dependencies - generate new
+                    values[1] = "Generate New"
+                    values[2] = str(min(1000, table_info.row_count * 2))  # 2x existing data
+            else:
+                # Empty table - generate new data
+                values[1] = "Generate New"
+                values[2] = "500"  # Default for empty tables
+            
+            values[3] = "Ready"
+            self.config_tree.item(item, values=values)
+        
+        self.update_selection_info()
+        
+        # Analyze FK dependencies for the selection
+        self.analyze_and_show_fk_dependencies()
+        
+        tk.messagebox.showinfo("Smart Selection", 
+                              "Applied intelligent defaults based on table characteristics:\n\n"
+                              "• Small reference tables (< 100 rows) → Use Existing\n"
+                              "• Larger tables with data → Generate New (2x existing)\n"
+                              "• Empty tables → Generate New (500 rows)\n\n"
+                              "FK dependencies have been analyzed and validated.")
+    
+    def update_selection_info(self):
+        """Update the selection information display."""
+        if not hasattr(self, 'config_tree'):
+            return
+        
+        total_tables = len(self.config_tree.get_children())
+        generate_count = 0
+        existing_count = 0
+        total_rows = 0
+        
+        for item in self.config_tree.get_children():
+            values = self.config_tree.item(item, "values")
+            mode = values[1]
+            rows = int(values[2]) if values[2].isdigit() else 0
+            
+            if mode == "Generate New" and rows > 0:
+                generate_count += 1
+                total_rows += rows
+            elif mode == "Use Existing":
+                existing_count += 1
+        
+        info_text = f"Tables: {total_tables} total | {generate_count} generating ({total_rows:,} rows) | {existing_count} using existing"
+        self.selection_info_var.set(info_text)
+    
+    def analyze_and_show_fk_dependencies(self):
+        """Analyze and display FK dependencies for current table selection."""
+        if not hasattr(self, 'schema') or not self.schema:
+            return
+        
+        # Build temporary config to analyze dependencies
+        temp_config = self.build_generation_config()
+        
+        try:
+            # Create temporary generator to analyze dependencies
+            from dbmocker.core.smart_generator import DependencyAwareGenerator
+            temp_generator = DependencyAwareGenerator(self.schema, temp_config, None)
+            
+            # Analyze FK dependencies
+            fk_dependencies = temp_generator.analyze_fk_dependencies_for_selection()
+            
+            if fk_dependencies:
+                # Update status for tables with FK dependencies to unselected tables
+                for item in self.config_tree.get_children():
+                    values = list(self.config_tree.item(item, "values"))
+                    table_name = values[0]
+                    mode = values[1]
+                    
+                    if table_name in fk_dependencies and mode == "Generate New":
+                        referenced_tables = fk_dependencies[table_name]
+                        values[3] = f"FK→{','.join(referenced_tables[:2])}{'...' if len(referenced_tables) > 2 else ''}"
+                        self.config_tree.item(item, values=values)
+                
+                # Show summary in a popup
+                dependency_text = "🔗 FK Dependencies Detected:\n\n"
+                dependency_text += "Selected tables that will use existing data from unselected tables:\n\n"
+                
+                for selected_table, referenced_tables in fk_dependencies.items():
+                    dependency_text += f"• {selected_table} → {', '.join(referenced_tables)}\n"
+                
+                dependency_text += "\n✅ These FK relationships will automatically use existing data from the referenced tables."
+                
+                # Create a more detailed popup
+                self.show_fk_dependency_details(fk_dependencies)
+            
+        except Exception as e:
+            logger.debug(f"Could not analyze FK dependencies: {e}")
+    
+    def show_fk_dependency_details(self, fk_dependencies):
+        """Show detailed FK dependency information in a popup window."""
+        if not fk_dependencies:
+            return
+        
+        # Create popup window
+        popup = tk.Toplevel(self.root)
+        popup.title("FK Dependencies Analysis")
+        popup.geometry("600x400")
+        popup.resizable(True, True)
+        popup.transient(self.root)
+        popup.grab_set()
+        
+        # Center the popup
+        popup.geometry("+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50))
+        
+        # Main frame
+        main_frame = ttk.Frame(popup)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="🔗 Foreign Key Dependencies", 
+                               font=("Arial", 14, "bold"))
+        title_label.pack(pady=(0, 10))
+        
+        # Description
+        desc_text = ("The following selected tables have foreign keys pointing to unselected tables.\n"
+                    "The system will automatically use existing data from the unselected tables.")
+        desc_label = ttk.Label(main_frame, text=desc_text, wraplength=550)
+        desc_label.pack(pady=(0, 15))
+        
+        # Scrollable text area for dependencies
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, height=15, width=70)
+        scrollbar = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=scrollbar.set)
+        
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Populate dependency information
+        for selected_table, referenced_tables in fk_dependencies.items():
+            text_widget.insert(tk.END, f"📊 {selected_table} (Selected for Generation)\n", "header")
+            text_widget.insert(tk.END, f"   └── Will use existing data from:\n")
+            
+            for ref_table in referenced_tables:
+                # Check if referenced table has data
+                table_info = next((t for t in self.schema.tables if t.name == ref_table), None)
+                row_count = table_info.row_count if table_info else 0
+                status = f"({row_count:,} existing rows)" if row_count > 0 else "(⚠️ No existing data)"
+                
+                text_widget.insert(tk.END, f"       • {ref_table} {status}\n")
+            
+            text_widget.insert(tk.END, f"\n")
+        
+        # Style the header text
+        text_widget.tag_configure("header", font=("Arial", 10, "bold"), foreground="blue")
+        
+        # Make text read-only
+        text_widget.config(state=tk.DISABLED)
+        
+        # Close button
+        close_button = ttk.Button(main_frame, text="✅ Understood", command=popup.destroy)
+        close_button.pack(pady=(10, 0))
+    
     def setup_advanced_tab(self):
         """Setup advanced options tab with all CLI features."""
-        main_frame = ttk.Frame(self.advanced_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        main_frame = ttk.Frame(self.advanced_frame, relief='solid', borderwidth=1)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
         
         # Title
         title_label = ttk.Label(main_frame, text="Advanced Options", 

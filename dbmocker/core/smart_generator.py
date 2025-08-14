@@ -78,7 +78,29 @@ class SmartFKValueManager:
                 logger.warning(f"No existing values found for {referenced_table}.{referenced_column} (marked as use_existing)")
                 return None
         else:
-            # For tables not marked as "use existing", prefer existing if configured, otherwise use all available
+            # Check if the referenced table is unselected (not in table_configs for generation)
+            # If so, it means we should use existing data from that unselected table
+            if self.config and hasattr(self.config, 'table_configs'):
+                is_table_selected_for_generation = False
+                
+                # Check if table is configured for generation (rows > 0 and not use_existing_data)
+                if referenced_table in self.config.table_configs:
+                    table_config = self.config.table_configs[referenced_table]
+                    if (table_config.rows_to_generate > 0 and 
+                        not getattr(table_config, 'use_existing_data', False)):
+                        is_table_selected_for_generation = True
+                
+                # If referenced table is not selected for generation, use existing data
+                if not is_table_selected_for_generation:
+                    existing_values = self.get_existing_values(referenced_table, referenced_column)
+                    if existing_values:
+                        logger.debug(f"Using existing data from unselected table {referenced_table} for FK")
+                        return random.choice(existing_values)
+                    else:
+                        logger.warning(f"No existing values found in unselected table {referenced_table}.{referenced_column}")
+                        return None
+            
+            # For tables selected for generation, prefer existing if configured, otherwise use all available
             if self.config and self.config.prefer_existing_fk_values:
                 existing_values = self.get_existing_values(referenced_table, referenced_column)
                 if existing_values:
@@ -364,6 +386,57 @@ class DependencyAwareGenerator(DataGenerator):
     def get_insertion_plan(self) -> InsertionPlan:
         """Get the dependency-aware insertion plan."""
         return self.insertion_plan
+    
+    def analyze_fk_dependencies_for_selection(self) -> Dict[str, List[str]]:
+        """Analyze FK dependencies between selected and unselected tables."""
+        selected_tables = set()
+        unselected_tables = set()
+        
+        # Determine which tables are selected for generation
+        for table_name, table_config in self.config.table_configs.items():
+            if (table_config.rows_to_generate > 0 and 
+                not getattr(table_config, 'use_existing_data', False)):
+                selected_tables.add(table_name)
+            else:
+                unselected_tables.add(table_name)
+        
+        # Find FK dependencies from selected tables to unselected tables
+        fk_dependencies = {}
+        
+        for table in self.schema.tables:
+            if table.name in selected_tables:
+                unselected_dependencies = []
+                
+                for fk in table.foreign_keys:
+                    if fk.referenced_table in unselected_tables:
+                        unselected_dependencies.append(fk.referenced_table)
+                
+                if unselected_dependencies:
+                    fk_dependencies[table.name] = unselected_dependencies
+        
+        return fk_dependencies
+    
+    def validate_fk_integrity_for_selection(self) -> Dict[str, Dict[str, bool]]:
+        """Validate that unselected referenced tables have existing data for FK integrity."""
+        validation_results = {}
+        fk_dependencies = self.analyze_fk_dependencies_for_selection()
+        
+        for selected_table, referenced_tables in fk_dependencies.items():
+            validation_results[selected_table] = {}
+            
+            table_info = next((t for t in self.schema.tables if t.name == selected_table), None)
+            if not table_info:
+                continue
+            
+            for fk in table_info.foreign_keys:
+                if fk.referenced_table in referenced_tables:
+                    # Check if referenced table has existing data
+                    referenced_column = fk.referenced_columns[0] if fk.referenced_columns else 'id'
+                    existing_values = self.fk_manager.get_existing_values(fk.referenced_table, referenced_column)
+                    
+                    validation_results[selected_table][fk.referenced_table] = len(existing_values) > 0
+        
+        return validation_results
     
     def suggest_table_configuration(self, table_name: str) -> Optional[TableGenerationConfig]:
         """Suggest optimal configuration for a table based on dependencies."""
