@@ -1763,12 +1763,12 @@ Enterprise-grade mock data generation for professional development.'''
                     
                     if 'use_existing_data' in table_config and table_config['use_existing_data']:
                         values[2] = "Use Existing"  # Mode at index 2
-                        values[3] = "0"  # Rows at index 3
+                        values[4] = "0"  # Rows at index 4
                     elif 'rows_to_generate' in table_config:
                         values[2] = "Generate New"  # Mode at index 2
-                        values[3] = table_config['rows_to_generate']  # Rows at index 3
+                        values[4] = table_config['rows_to_generate']  # Rows at index 4
                     
-                    values[4] = "Ready"  # Status at index 4
+                    values[5] = "Ready"  # Status at index 5
                     self.config_tree.item(item, values=values)
     
     def extract_config_from_gui(self):
@@ -1795,7 +1795,7 @@ Enterprise-grade mock data generation for professional development.'''
                 selected = values[0] == "☑️"  # Check if selected
                 table_name = values[1]  # Table name at index 1
                 mode = values[2]  # Mode at index 2
-                rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
+                rows_to_generate = int(values[4]) if len(values) > 4 and values[4].isdigit() else 0  # Rows at index 4
                 
                 if selected and rows_to_generate > 0:
                     config['table_configs'][table_name] = {
@@ -1996,7 +1996,7 @@ Enterprise-grade mock data generation for professional development.'''
                     selected = values[0] == "☑️"  # Check if selected
                     table_name = values[1]  # Table name at index 1
                     mode = values[2]  # Mode at index 2
-                    rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
+                    rows_to_generate = int(values[4]) if len(values) > 4 and values[4].isdigit() else 0  # Rows at index 4
                     
                     # Only include selected tables that exist in schema
                     if selected and table_name in schema_table_names:
