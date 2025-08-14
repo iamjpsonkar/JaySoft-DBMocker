@@ -144,6 +144,17 @@ class DatabaseConnection:
             self._session_factory = None
             logger.info("Database connection closed")
     
+    def quote_identifier(self, identifier: str) -> str:
+        """Quote table or column name properly based on database type."""
+        if self.config.driver == "mysql":
+            return f"`{identifier}`"
+        elif self.config.driver == "postgresql":
+            return f'"{identifier}"'
+        elif self.config.driver == "sqlite":
+            return f'"{identifier}"'
+        else:
+            return identifier
+    
     def __enter__(self):
         """Context manager entry."""
         self.connect()
