@@ -525,6 +525,34 @@ class DBMockerGUI:
         global_canvas.pack(side="left", fill="both", expand=True)
         global_scrollbar.pack(side="right", fill="y")
         
+        # Add touchpad scrolling to global settings canvas
+        def on_global_mousewheel(event):
+            # Handle both mouse wheel and touchpad scrolling
+            if event.delta:
+                # Windows/Linux mouse wheel
+                global_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # Alternative for some systems
+                if event.num == 4:
+                    global_canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    global_canvas.yview_scroll(1, "units")
+        
+        def on_global_trackpad_scroll(event):
+            # Mac touchpad/trackpad scrolling
+            global_canvas.yview_scroll(int(-1*event.delta), "units")
+        
+        # Bind multiple scroll events for cross-platform compatibility
+        global_canvas.bind("<MouseWheel>", on_global_mousewheel)  # Windows/Linux
+        global_canvas.bind("<Button-4>", on_global_mousewheel)    # Linux scroll up
+        global_canvas.bind("<Button-5>", on_global_mousewheel)    # Linux scroll down
+        
+        # Mac-specific touchpad events
+        try:
+            global_canvas.bind("<Control-MouseWheel>", on_global_trackpad_scroll)  # Mac trackpad
+        except:
+            pass
+        
         # Use scrollable frame for global settings content
         global_frame = global_scrollable_frame
         
@@ -621,10 +649,33 @@ class DBMockerGUI:
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
         
-        # Add mouse wheel scrolling
+        # Add mouse wheel and touchpad scrolling
         def on_config_mousewheel(event):
-            self.config_tree.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.config_tree.bind("<MouseWheel>", on_config_mousewheel)
+            # Handle both mouse wheel and touchpad scrolling
+            if event.delta:
+                # Windows/Linux mouse wheel
+                self.config_tree.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # Alternative for some systems
+                if event.num == 4:
+                    self.config_tree.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.config_tree.yview_scroll(1, "units")
+        
+        def on_config_trackpad_scroll(event):
+            # Mac touchpad/trackpad scrolling
+            self.config_tree.yview_scroll(int(-1*event.delta), "units")
+        
+        # Bind multiple scroll events for cross-platform compatibility
+        self.config_tree.bind("<MouseWheel>", on_config_mousewheel)  # Windows/Linux
+        self.config_tree.bind("<Button-4>", on_config_mousewheel)    # Linux scroll up
+        self.config_tree.bind("<Button-5>", on_config_mousewheel)    # Linux scroll down
+        
+        # Mac-specific touchpad events
+        try:
+            self.config_tree.bind("<Control-MouseWheel>", on_config_trackpad_scroll)  # Mac trackpad
+        except:
+            pass
         
         # Bind clicks for interactions
         self.config_tree.bind("<Double-1>", self.toggle_table_mode)
@@ -746,10 +797,33 @@ class DBMockerGUI:
         self.log_text = scrolledtext.ScrolledText(main_frame, height=20, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         
-        # Enhanced mouse wheel scrolling for logs
+        # Enhanced mouse wheel and touchpad scrolling for logs
         def on_logs_mousewheel(event):
-            self.log_text.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.log_text.bind("<MouseWheel>", on_logs_mousewheel)
+            # Handle both mouse wheel and touchpad scrolling
+            if event.delta:
+                # Windows/Linux mouse wheel
+                self.log_text.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # Alternative for some systems
+                if event.num == 4:
+                    self.log_text.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    self.log_text.yview_scroll(1, "units")
+        
+        def on_logs_trackpad_scroll(event):
+            # Mac touchpad/trackpad scrolling
+            self.log_text.yview_scroll(int(-1*event.delta), "units")
+        
+        # Bind multiple scroll events for cross-platform compatibility
+        self.log_text.bind("<MouseWheel>", on_logs_mousewheel)  # Windows/Linux
+        self.log_text.bind("<Button-4>", on_logs_mousewheel)    # Linux scroll up
+        self.log_text.bind("<Button-5>", on_logs_mousewheel)    # Linux scroll down
+        
+        # Mac-specific touchpad events
+        try:
+            self.log_text.bind("<Control-MouseWheel>", on_logs_trackpad_scroll)  # Mac trackpad
+        except:
+            pass
     
     def setup_logging(self):
         """Setup logging to display in GUI."""
@@ -1762,10 +1836,36 @@ class DBMockerGUI:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Bind mousewheel to canvas
+        # Bind mousewheel and touchpad scrolling to canvas
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            # Handle both mouse wheel and touchpad scrolling
+            if event.delta:
+                # Windows/Linux mouse wheel
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            else:
+                # Alternative for some systems
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+        
+        def _on_trackpad_scroll(event):
+            # Mac touchpad/trackpad scrolling
+            canvas.yview_scroll(int(-1*event.delta), "units")
+        
+        # Bind multiple scroll events for cross-platform compatibility
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)  # Windows/Linux
+        canvas.bind_all("<Button-4>", _on_mousewheel)    # Linux scroll up
+        canvas.bind_all("<Button-5>", _on_mousewheel)    # Linux scroll down
+        
+        # Mac-specific touchpad events
+        try:
+            canvas.bind_all("<Control-MouseWheel>", _on_trackpad_scroll)  # Mac trackpad
+        except:
+            pass
+        
+        # Focus the canvas for scroll events
+        canvas.focus_set()
     
     def toggle_multiprocessing_options(self):
         """Toggle multiprocessing settings visibility."""
