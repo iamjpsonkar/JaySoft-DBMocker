@@ -1538,6 +1538,7 @@ Enterprise-grade mock data generation for professional development.'''
         try:
             # Create a temporary connection to fetch database list
             temp_conn = DatabaseConnection(config)
+            temp_conn.connect()  # Explicitly connect to the server
             
             databases = []
             with temp_conn.get_session() as session:
@@ -1553,8 +1554,12 @@ Enterprise-grade mock data generation for professional development.'''
                     """))
                     databases = [row[0] for row in result]
                 elif config.driver == "sqlite":
-                    # For SQLite, we can't list databases like this, return empty or handle differently
-                    databases = []
+                    # For SQLite, since it's file-based, we can't list "databases" 
+                    # Instead, we'll return the current database name if valid
+                    if config.database:
+                        databases = [config.database]
+                    else:
+                        databases = []
                 else:
                     raise ValueError(f"Unsupported database driver: {config.driver}")
             

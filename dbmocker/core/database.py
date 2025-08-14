@@ -16,7 +16,7 @@ class DatabaseConfig(BaseModel):
     
     host: str = Field(..., description="Database host")
     port: int = Field(..., description="Database port")
-    database: str = Field(..., description="Database name")
+    database: str = Field(default="", description="Database name")
     username: str = Field(..., description="Database username")
     password: str = Field(..., description="Database password")
     driver: str = Field(default="postgresql", description="Database driver")
@@ -85,10 +85,15 @@ class DatabaseConnection:
         else:
             raise ValueError(f"Unsupported driver: {self.config.driver}")
         
-        return (
-            f"{driver_name}://{self.config.username}:{self.config.password}"
-            f"@{self.config.host}:{self.config.port}/{self.config.database}"
-        )
+        # Build base URL
+        base_url = f"{driver_name}://{self.config.username}:{self.config.password}@{self.config.host}:{self.config.port}"
+        
+        # Add database name if specified (for database-specific connections)
+        if self.config.database:
+            return f"{base_url}/{self.config.database}"
+        else:
+            # Server-level connection (for listing databases)
+            return base_url
     
     def _get_connect_args(self) -> Dict[str, Any]:
         """Get driver-specific connection arguments."""
