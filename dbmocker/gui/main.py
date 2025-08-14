@@ -126,6 +126,9 @@ class DBMockerGUI:
         # Configure window close behavior
         self.root.protocol("WM_DELETE_WINDOW", self.close_application)
         
+        # Add keyboard shortcuts
+        self.setup_keyboard_shortcuts()
+        
         # Application state
         self.db_connection: Optional[DatabaseConnection] = None
         self.schema = None
@@ -146,24 +149,38 @@ class DBMockerGUI:
         """Configure window for cross-platform compatibility."""
         system = platform.system()
         
+        # Set minimum size for all platforms
+        self.root.minsize(900, 600)
+        
         if system == "Darwin":  # macOS
-            self.root.geometry("1100x750")
+            # Start with full screen geometry
+            self.root.geometry("1400x900")
             # Enable native macOS window controls
             self.root.tk.call('tk', 'scaling', 1.0)
-            # Set minimum size
-            self.root.minsize(900, 600)
+            # Maximize window on macOS
+            try:
+                self.root.state('zoomed')
+            except tk.TclError:
+                # Fallback: get screen dimensions and set to full screen
+                screen_width = self.root.winfo_screenwidth()
+                screen_height = self.root.winfo_screenheight()
+                self.root.geometry(f"{screen_width}x{screen_height}+0+0")
         elif system == "Windows":  # Windows
-            self.root.geometry("1000x700")
-            self.root.state('zoomed')  # Start maximized on Windows
-            self.root.minsize(800, 600)
+            # Start maximized/full screen on Windows
+            self.root.state('zoomed')
         else:  # Linux
-            self.root.geometry("1000x700")
-            self.root.minsize(800, 600)
             # Try to maximize on Linux
             try:
                 self.root.state('zoomed')
             except tk.TclError:
-                pass  # Fallback if zoomed not supported
+                # Fallback: get screen dimensions and set to full screen
+                try:
+                    screen_width = self.root.winfo_screenwidth()
+                    screen_height = self.root.winfo_screenheight()
+                    self.root.geometry(f"{screen_width}x{screen_height}+0+0")
+                except:
+                    # Final fallback
+                    self.root.geometry("1400x900")
     
     def set_application_icon(self):
         """Set application icon for different platforms."""
@@ -190,6 +207,41 @@ class DBMockerGUI:
                     pass  # Icon file not found, continue without icon
         except Exception:
             pass  # Continue without icon if any error occurs
+    
+    def setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts for the application."""
+        # F11 for fullscreen toggle
+        self.root.bind('<F11>', self.toggle_fullscreen)
+        self.root.bind('<Escape>', self.exit_fullscreen)
+        
+        # Ctrl+Q to quit
+        self.root.bind('<Control-q>', lambda e: self.close_application())
+        
+        # Focus window (make sure it's in front)
+        self.root.focus_force()
+        self.root.lift()
+    
+    def toggle_fullscreen(self, event=None):
+        """Toggle fullscreen mode."""
+        try:
+            current_state = self.root.attributes('-fullscreen')
+            self.root.attributes('-fullscreen', not current_state)
+        except tk.TclError:
+            # Fallback for systems that don't support -fullscreen
+            if hasattr(self, '_is_fullscreen') and self._is_fullscreen:
+                self.root.state('normal')
+                self._is_fullscreen = False
+            else:
+                self.root.state('zoomed')
+                self._is_fullscreen = True
+    
+    def exit_fullscreen(self, event=None):
+        """Exit fullscreen mode."""
+        try:
+            self.root.attributes('-fullscreen', False)
+        except tk.TclError:
+            self.root.state('normal')
+            self._is_fullscreen = False
     
     def setup_gui(self):
         """Setup the GUI layout."""
@@ -381,26 +433,13 @@ class DBMockerGUI:
         self.table_tree.column("columns", width=100)
         self.table_tree.column("foreign_keys", width=100)
         
-        # Create scrollable container for table tree
-        tree_container = ttk.Frame(table_frame)
-        tree_container.pack(fill=tk.BOTH, expand=True)
+        # Scrollbars
+        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table_tree.yview)
+        self.table_tree.configure(yscrollcommand=scrollbar.set)
         
-        # Vertical scrollbar
-        v_scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.table_tree.yview)
-        self.table_tree.configure(yscrollcommand=v_scrollbar.set)
-        
-        # Horizontal scrollbar
-        h_scrollbar = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.table_tree.xview)
-        self.table_tree.configure(xscrollcommand=h_scrollbar.set)
-        
-        # Pack tree and scrollbars
-        self.table_tree.grid(row=0, column=0, sticky="nsew")
-        v_scrollbar.grid(row=0, column=1, sticky="ns")
-        h_scrollbar.grid(row=1, column=0, sticky="ew")
-        
-        # Configure grid weights
-        tree_container.grid_rowconfigure(0, weight=1)
-        tree_container.grid_columnconfigure(0, weight=1)
+        # Pack tree and scrollbar
+        self.table_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Add mouse wheel scrolling
         def on_mousewheel(event):
@@ -496,26 +535,13 @@ class DBMockerGUI:
         self.config_tree.column("rows", width=110)
         self.config_tree.column("status", width=100)
         
-        # Create scrollable container for config tree
-        config_tree_container = ttk.Frame(table_config_frame)
-        config_tree_container.pack(fill=tk.BOTH, expand=True)
+        # Scrollbar
+        config_scrollbar = ttk.Scrollbar(table_config_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
+        self.config_tree.configure(yscrollcommand=config_scrollbar.set)
         
-        # Vertical scrollbar
-        config_v_scrollbar = ttk.Scrollbar(config_tree_container, orient=tk.VERTICAL, command=self.config_tree.yview)
-        self.config_tree.configure(yscrollcommand=config_v_scrollbar.set)
-        
-        # Horizontal scrollbar
-        config_h_scrollbar = ttk.Scrollbar(config_tree_container, orient=tk.HORIZONTAL, command=self.config_tree.xview)
-        self.config_tree.configure(xscrollcommand=config_h_scrollbar.set)
-        
-        # Pack tree and scrollbars using grid
-        self.config_tree.grid(row=0, column=0, sticky="nsew")
-        config_v_scrollbar.grid(row=0, column=1, sticky="ns")
-        config_h_scrollbar.grid(row=1, column=0, sticky="ew")
-        
-        # Configure grid weights
-        config_tree_container.grid_rowconfigure(0, weight=1)
-        config_tree_container.grid_columnconfigure(0, weight=1)
+        # Pack tree and scrollbar
+        self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Add mouse wheel scrolling
         def on_config_mousewheel(event):
