@@ -7,6 +7,7 @@ import queue
 import logging
 import platform
 import sys
+import time
 from typing import Optional, Dict, Any
 import json
 from pathlib import Path
@@ -641,6 +642,24 @@ class DBMockerGUI:
         ttk.Checkbutton(controls_frame, text="🔗 Dependency-aware order", 
                        variable=self.dependency_aware_var).pack(side=tk.LEFT, padx=(20, 0))
         
+        # Second row of controls for advanced options
+        advanced_controls_frame = ttk.Frame(controls_frame)
+        advanced_controls_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        self.fast_generation_var = tk.BooleanVar(value=False)
+        fast_gen_cb = ttk.Checkbutton(advanced_controls_frame, text="🚀 Fast Generation (Data Reuse Optimization)", 
+                       variable=self.fast_generation_var)
+        fast_gen_cb.pack(side=tk.LEFT)
+        
+        # Add tooltip for fast generation
+        ToolTip(fast_gen_cb, 
+               "Fast Generation Mode:\n"
+               "• Enables smart data reuse for faster generation\n"
+               "• Uses duplicate values where constraints allow\n"
+               "• Significantly speeds up large dataset generation\n"
+               "• Maintains referential integrity and constraints\n"
+               "• Recommended for development/testing datasets")
+        
         # Progress
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding=20)
         progress_frame.pack(fill=tk.X, pady=(0, 20))
@@ -648,8 +667,12 @@ class DBMockerGUI:
         self.progress_label = ttk.Label(progress_frame, text="Ready to generate data")
         self.progress_label.pack()
         
-        self.progress_bar = ttk.Progressbar(progress_frame, mode='indeterminate')
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', maximum=100)
         self.progress_bar.pack(fill=tk.X, pady=(10, 0))
+        
+        # Add percentage label
+        self.progress_percentage_label = ttk.Label(progress_frame, text="0%", font=("Arial", 12, "bold"))
+        self.progress_percentage_label.pack(pady=(5, 0))
         
         # Results
         results_frame = ttk.LabelFrame(main_frame, text="Generation Results", padding=20)
@@ -2070,6 +2093,7 @@ Enterprise-grade mock data generation for professional development.'''
             
         def generation_task():
             try:
+                start_time = time.time()  # Track generation duration
                 # Set random seed if enabled
                 if hasattr(self, 'use_seed_var') and self.use_seed_var.get():
                     try:
@@ -2304,9 +2328,18 @@ Enterprise-grade mock data generation for professional development.'''
                                if item[1] > 0 and item[0] in table_configs]
                     processing_order = [("GUI Order", gui_order)]
                     
-                # Process tables
+                # Process tables with progress tracking
                 total_generated = 0
                 total_inserted = 0
+                
+                # Calculate total work for progress tracking
+                total_rows_to_generate = sum(table_configs.values())
+                completed_rows = 0
+                
+                # Check if fast generation mode is enabled (optimization)
+                fast_generation_enabled = hasattr(self, 'fast_generation_var') and self.fast_generation_var.get()
+                if fast_generation_enabled:
+                    self.result_queue.put(("progress", "🚀 Fast Generation Mode: Using data reuse optimization"))
                 
                 for batch_name, table_list in processing_order:
                     if len(processing_order) > 1:
@@ -2314,6 +2347,10 @@ Enterprise-grade mock data generation for professional development.'''
                     
                     for table_name in table_list:
                         rows_to_generate = table_configs[table_name]
+                        
+                        # Calculate and report progress percentage
+                        progress_percentage = (completed_rows / total_rows_to_generate) * 100 if total_rows_to_generate > 0 else 0
+                        self.result_queue.put(("progress", f"📊 Progress: {progress_percentage:.1f}% - Processing {table_name} ({rows_to_generate:,} rows)"))
                         
                         if self.spec_driven_var.get() and table_specs:
                             # Specification-driven mode
@@ -2323,10 +2360,22 @@ Enterprise-grade mock data generation for professional development.'''
                                 
                             table_spec = table_specs[table_name]
                             
-                            self.result_queue.put(("progress", f"⚡ Generating {rows_to_generate} rows for {table_name} using exact specifications..."))
+                            self.result_queue.put(("progress", f"⚡ Generating {rows_to_generate:,} rows for {table_name} using exact specifications..."))
+                            
+                            # Apply fast generation optimization if enabled
+                            if fast_generation_enabled:
+                                self.result_queue.put(("progress", f"🏎️ Fast mode: Optimizing data generation for {table_name}"))
+                                # Enable duplicate reuse in spec generator for faster generation
+                                original_duplicate_mode = getattr(table_spec, 'duplicate_allowed', False)
+                                if hasattr(table_spec, 'duplicate_allowed'):
+                                    table_spec.duplicate_allowed = True
                             
                             # Generate data using specification-driven approach
                             data = spec_generator._generate_table_data(table_spec, rows_to_generate)
+                            
+                            # Restore original setting
+                            if fast_generation_enabled and hasattr(table_spec, 'duplicate_allowed'):
+                                table_spec.duplicate_allowed = original_duplicate_mode
                             total_generated += len(data)
                             
                             # Insert data (if not dry run)
@@ -2343,12 +2392,19 @@ Enterprise-grade mock data generation for professional development.'''
                                     rows_inserted = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
                                 total_inserted += rows_inserted.total_rows_generated
                             
+                            # Update progress tracking
+                            completed_rows += len(data)
+                            final_progress = (completed_rows / total_rows_to_generate) * 100 if total_rows_to_generate > 0 else 100
+                            
                             self.result_queue.put(("table_complete", {
                                 'table': table_name,
                                 'generated': len(data),
                                 'inserted': len(data) if not self.dry_run_var.get() else 0,
                                 'spec_driven': True,
-                                'batch': batch_name
+                                'batch': batch_name,
+                                'progress_percentage': final_progress,
+                                'completed_rows': completed_rows,
+                                'total_rows': total_rows_to_generate
                             }))
                         else:
                             # Legacy mode - verify table exists in schema
@@ -2357,13 +2413,47 @@ Enterprise-grade mock data generation for professional development.'''
                                 self.result_queue.put(("progress", f"⚠️ Skipping table '{table_name}' - not found in schema analysis"))
                                 continue
                             
-                            self.result_queue.put(("progress", f"Generating data for {table_name}..."))
+                            self.result_queue.put(("progress", f"⚡ Generating {rows_to_generate:,} rows for {table_name}..."))
+                            
+                            # Apply fast generation optimization if enabled
+                            if fast_generation_enabled:
+                                self.result_queue.put(("progress", f"🏎️ Fast mode: Enabling data reuse optimization for {table_name}"))
+                                # Enable duplicate mode for faster generation
+                                original_duplicate_allowed = config.duplicate_allowed
+                                original_global_mode = config.global_duplicate_mode
+                                config.duplicate_allowed = True
+                                config.global_duplicate_mode = "smart_duplicates"
+                                
+                                # Apply duplicate configuration to all safe columns
+                                if table_name in config.table_configs:
+                                    table_config = config.table_configs[table_name]
+                                else:
+                                    from dbmocker.core.models import TableGenerationConfig
+                                    table_config = TableGenerationConfig()
+                                    config.table_configs[table_name] = table_config
+                                    
+                                # Get columns that can safely have duplicates
+                                duplicate_allowed_columns = self._get_duplicate_allowed_columns(table_name)
+                                for column_name in duplicate_allowed_columns:
+                                    from dbmocker.core.models import ColumnGenerationConfig
+                                    table_config.column_configs[column_name] = ColumnGenerationConfig(
+                                        duplicate_mode="smart_duplicates",
+                                        duplicate_probability=0.7,  # High probability for speed
+                                        max_duplicate_values=5      # Limited set for fast reuse
+                                    )
+                                
+                                self.result_queue.put(("progress", f"🎯 Fast mode: Applied to {len(duplicate_allowed_columns)} columns in {table_name}"))
                             
                             # Generate data using enhanced generator if available
                             if hasattr(generator, 'generate_data_for_table_parallel') and use_parallel:
                                 data = generator.generate_data_for_table_parallel(table_name, rows_to_generate)
                             else:
                                 data = generator.generate_data_for_table(table_name, rows_to_generate)
+                                
+                            # Restore original settings if fast mode was used
+                            if fast_generation_enabled:
+                                config.duplicate_allowed = original_duplicate_allowed
+                                config.global_duplicate_mode = original_global_mode
                             total_generated += len(data)
                             
                             # Insert data (if not dry run)
@@ -2380,12 +2470,20 @@ Enterprise-grade mock data generation for professional development.'''
                                     stats = inserter.insert_data(table_name, data, int(self.batch_size_var.get()))
                                 total_inserted += stats.total_rows_generated
                             
+                            # Update progress tracking
+                            completed_rows += len(data)
+                            final_progress = (completed_rows / total_rows_to_generate) * 100 if total_rows_to_generate > 0 else 100
+                            
                             self.result_queue.put(("table_complete", {
                                 'table': table_name,
                                 'generated': len(data),
                                 'inserted': len(data) if not self.dry_run_var.get() else 0,
                                 'spec_driven': False,
-                                'batch': batch_name
+                                'batch': batch_name,
+                                'progress_percentage': final_progress,
+                                'completed_rows': completed_rows,
+                                'total_rows': total_rows_to_generate,
+                                'fast_mode_used': fast_generation_enabled
                             }))
                 
                 # Verify integrity if requested
@@ -2394,9 +2492,15 @@ Enterprise-grade mock data generation for professional development.'''
                     integrity_report = inserter.verify_data_integrity()
                     self.result_queue.put(("integrity_check", integrity_report))
                 
+                # Calculate generation duration and final summary
+                end_time = time.time()
+                generation_duration = end_time - start_time if 'start_time' in locals() else 0
+                
                 self.result_queue.put(("generation_complete", {
                     'total_generated': total_generated,
                     'total_inserted': total_inserted,
+                    'duration': generation_duration,
+                    'fast_mode_used': fast_generation_enabled,
                     'spec_driven': self.spec_driven_var.get(),
                     'dependency_aware': self.dependency_aware_var.get(),
                     'tables_analyzed': len(table_specs) if table_specs else 0,
@@ -2409,7 +2513,9 @@ Enterprise-grade mock data generation for professional development.'''
         
         # Start generation
         self.generate_button.config(state=tk.DISABLED, text="Generating...")
-        self.progress_bar.start()
+        self.progress_bar['value'] = 0  # Reset progress bar
+        self.progress_percentage_label.config(text="0%")
+        self.progress_bar.start()  # This will be stopped and switched to determinate mode once we have progress data
         
         thread = threading.Thread(target=generation_task)
         thread.daemon = True
@@ -2635,17 +2741,42 @@ Enterprise-grade mock data generation for professional development.'''
                     self.progress_label.config(text=data)
                 
                 elif result_type == "table_complete":
-                    message = f"✅ {data['table']}: Generated {data['generated']:,}, Inserted {data['inserted']:,}\n"
+                    # Update progress bar and percentage if available
+                    if 'progress_percentage' in data:
+                        self.progress_bar['value'] = data['progress_percentage']
+                        self.progress_percentage_label.config(text=f"{data['progress_percentage']:.1f}%")
+                        
+                        # Update progress label with detailed info
+                        if 'completed_rows' in data and 'total_rows' in data:
+                            progress_text = f"Progress: {data['completed_rows']:,} / {data['total_rows']:,} rows ({data['progress_percentage']:.1f}%)"
+                            self.progress_label.config(text=progress_text)
+                    
+                    # Format message with fast mode indicator
+                    fast_indicator = " 🚀" if data.get('fast_mode_used', False) else ""
+                    message = f"✅ {data['table']}: Generated {data['generated']:,}, Inserted {data['inserted']:,}{fast_indicator}\n"
                     self.append_to_results(message)
                 
                 elif result_type == "generation_complete":
                     self.generate_button.config(state=tk.NORMAL, text="🎲 Generate Data")
                     self.progress_bar.stop()
+                    self.progress_bar['value'] = 100  # Complete
+                    self.progress_percentage_label.config(text="100%")
                     self.progress_label.config(text="Generation completed!")
+                    
+                    # Enhanced summary with performance info
+                    duration = data.get('duration', 0)
+                    fast_mode_used = data.get('fast_mode_used', False)
                     
                     summary = f"\n🎉 Generation Summary:\n"
                     summary += f"  Total Generated: {data['total_generated']:,} rows\n"
                     summary += f"  Total Inserted: {data['total_inserted']:,} rows\n"
+                    if duration > 0:
+                        rows_per_second = data['total_generated'] / duration
+                        summary += f"  Duration: {duration:.2f} seconds\n"
+                        summary += f"  Speed: {rows_per_second:,.0f} rows/second\n"
+                    if fast_mode_used:
+                        summary += f"  🚀 Fast Generation Mode: Enabled\n"
+                    summary += f"  Completion: 100% ✅\n"
                     self.append_to_results(summary)
                 
                 elif result_type == "integrity_check":
