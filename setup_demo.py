@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick setup script for JaySoft:DBMocker demo.
+Quick setup script for JaySoft-DBMocker demo.
 This script sets up a demo environment and runs basic examples.
 """
 
@@ -43,7 +43,7 @@ def install_dependencies():
     print("=" * 50)
     
     # Install package in development mode
-    if not run_command("pip install -e .", "Installing JaySoft:DBMocker"):
+    if not run_command("pip install -e .", "Installing JaySoft-DBMocker"):
         return False
     
     # Install development dependencies
@@ -117,9 +117,9 @@ def run_examples():
 
 def main():
     """Main setup function."""
-    print("🚀 JaySoft:DBMocker Demo Setup")
+    print("🚀 JaySoft-DBMocker Demo Setup")
     print("=" * 70)
-    print("This script will set up JaySoft:DBMocker and run a complete demonstration.")
+    print("This script will set up JaySoft-DBMocker and run a complete demonstration.")
     print()
     
     # Check Python version
@@ -161,10 +161,10 @@ def main():
     
     # Final summary
     print("\n" + "=" * 70)
-    print("🎉 JaySoft:DBMocker Demo Setup Complete!")
+    print("🎉 JaySoft-DBMocker Demo Setup Complete!")
     print()
     print("📋 What was installed:")
-    print("   ✅ JaySoft:DBMocker package with all dependencies")
+    print("   ✅ JaySoft-DBMocker package with all dependencies")
     print("   ✅ Demo SQLite database with sample schema")
     print("   ✅ Configuration examples")
     print()

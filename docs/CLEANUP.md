@@ -1,6 +1,6 @@
 # Repository Cleanup Guide
 
-This guide explains how to use the `cleanup.py` script to maintain a clean development environment for JaySoft:DBMocker.
+This guide explains how to use the `cleanup.py` script to maintain a clean development environment for JaySoft-DBMocker.
 
 ## Overview
 
@@ -151,7 +151,7 @@ Always test with `--dry-run` first to see what would be removed.
 ### Clean Repository
 ```bash
 $ python cleanup.py --dry-run
-🧹 JaySoft:DBMocker Repository Cleanup
+🧹 JaySoft-DBMocker Repository Cleanup
 ==================================================
 
 ✅ Repository is already clean! No files to remove.
@@ -160,7 +160,7 @@ $ python cleanup.py --dry-run
 ### Files Found for Cleanup
 ```bash
 $ python cleanup.py --dry-run
-🧹 JaySoft:DBMocker Repository Cleanup
+🧹 JaySoft-DBMocker Repository Cleanup
 ==================================================
 
 📋 Found 15 items to remove (2.3 MB):
@@ -182,7 +182,7 @@ $ python cleanup.py --dry-run
 ### Successful Cleanup
 ```bash
 $ python cleanup.py --force
-🧹 JaySoft:DBMocker Repository Cleanup
+🧹 JaySoft-DBMocker Repository Cleanup
 ==================================================
 
 📋 Found 15 items to remove (2.3 MB):

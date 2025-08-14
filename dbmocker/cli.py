@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 @click.option('--quiet', '-q', is_flag=True, help='Suppress non-error output')
 def cli(verbose: bool, quiet: bool):
-    """JaySoft:DBMocker - Generate realistic mock data for SQL databases."""
+    """JaySoft-DBMocker - Generate realistic mock data for SQL databases."""
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     elif quiet:
@@ -422,7 +422,7 @@ def gui():
     """Launch the graphical user interface."""
     try:
         from dbmocker.gui.main import launch_gui
-        click.echo("🚀 Launching JaySoft:DBMocker GUI...")
+        click.echo("🚀 Launching JaySoft-DBMocker GUI...")
         launch_gui()
     except ImportError:
         click.echo("❌ GUI dependencies not installed. Install with: pip install jaysoft-dbmocker[gui]", err=True)

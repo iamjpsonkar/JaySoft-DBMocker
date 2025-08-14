@@ -1,4 +1,4 @@
-"""Demo setup script for JaySoft:DBMocker - creates a sample database with realistic schema."""
+"""Demo setup script for JaySoft-DBMocker - creates a sample database with realistic schema."""
 
 import sqlite3
 import os

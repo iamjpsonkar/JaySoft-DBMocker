@@ -1,5 +1,5 @@
 """
-JaySoft:DBMocker - A comprehensive tool for generating realistic mock data for SQL databases.
+JaySoft-DBMocker - A comprehensive tool for generating realistic mock data for SQL databases.
 
 This package provides tools to:
 - Analyze database schemas and existing data

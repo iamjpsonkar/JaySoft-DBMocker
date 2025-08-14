@@ -1,4 +1,4 @@
-"""Basic usage examples for JaySoft:DBMocker."""
+"""Basic usage examples for JaySoft-DBMocker."""
 
 import os
 import sys
@@ -353,7 +353,7 @@ def cleanup():
 
 
 if __name__ == "__main__":
-    print("🚀 JaySoft:DBMocker Usage Examples")
+    print("🚀 JaySoft-DBMocker Usage Examples")
     print("=" * 70)
     
     try:

@@ -2,18 +2,18 @@
 
 ## 📍 Repository Location
 
-This **JaySoft:DBMocker** project will be hosted at:
+This **JaySoft-DBMocker** project will be hosted at:
 **https://github.com/iamjpsonkar/JaySoft-DBMocker**
 
 ## 🏢 JaySoft Project Portfolio
 
-Based on your GitHub profile at [https://github.com/iamjpsonkar](https://github.com/iamjpsonkar?tab=repositories), JaySoft:DBMocker joins your existing JaySoft project ecosystem:
+Based on your GitHub profile at [https://github.com/iamjpsonkar](https://github.com/iamjpsonkar?tab=repositories), JaySoft-DBMocker joins your existing JaySoft project ecosystem:
 
 ### 🔧 **Development Tools**
 
 -   **JaySoft-DevBox** - Streamlined local development environments
 -   **JaySoft-KafkaDocker** - Kafka development setup
--   **JaySoft:DBMocker** - Database mock data generation (this project)
+-   **JaySoft-DBMocker** - Database mock data generation (this project)
 
 ### 🌐 **Web & Utilities**
 
@@ -30,7 +30,7 @@ When you're ready to create the repository:
 
     ```bash
     # On GitHub, create new repository: JaySoft-DBMocker
-    # Description: "JaySoft:DBMocker - Comprehensive database mock data generator"
+    # Description: "JaySoft-DBMocker - Comprehensive database mock data generator"
     ```
 
 2. **Initialize Repository**:
@@ -39,7 +39,7 @@ When you're ready to create the repository:
     cd /Users/jsonkar/DBMocker
     git init
     git add .
-    git commit -m "Initial commit: JaySoft:DBMocker v1.0.0"
+    git commit -m "Initial commit: JaySoft-DBMocker v1.0.0"
     git branch -M main
     git remote add origin https://github.com/iamjpsonkar/JaySoft-DBMocker.git
     git push -u origin main
@@ -47,13 +47,13 @@ When you're ready to create the repository:
 
 3. **Repository Configuration**:
     - **Topics**: `database`, `mock-data`, `sql`, `python`, `cli`, `gui`, `jaysoft`
-    - **Description**: "JaySoft:DBMocker - A comprehensive tool for generating realistic mock data for SQL databases"
+    - **Description**: "JaySoft-DBMocker - A comprehensive tool for generating realistic mock data for SQL databases"
     - **Website**: `https://iamjpsonkar.github.io/JaySoft-DBMocker`
     - **License**: MIT
 
 ## 🎯 Integration with Your Portfolio
 
-JaySoft:DBMocker complements your existing projects:
+JaySoft-DBMocker complements your existing projects:
 
 -   **Works with JaySoft-DevBox**: Provide test data for development environments
 -   **Complements learning repos**: Practical tool for database learning projects

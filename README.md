@@ -1,4 +1,4 @@
-# JaySoft:DBMocker 🎲
+# JaySoft-DBMocker 🎲
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,7 +6,7 @@
 
 **A comprehensive, production-ready tool for generating realistic mock data for SQL databases.**
 
-JaySoft:DBMocker intelligently analyzes your database schema, understands constraints and relationships, and generates realistic mock data that respects all foreign keys, unique constraints, and data patterns.
+JaySoft-DBMocker intelligently analyzes your database schema, understands constraints and relationships, and generates realistic mock data that respects all foreign keys, unique constraints, and data patterns.
 
 ## ✨ Features
 

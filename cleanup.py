@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JaySoft:DBMocker Repository Cleanup Script
+JaySoft-DBMocker Repository Cleanup Script
 
 This script removes all files and directories that should be ignored according to .gitignore
 but may still be present in the working directory. Useful for maintaining a clean development
@@ -239,7 +239,7 @@ class RepositoryCleanup:
     
     def cleanup(self, dry_run: bool = False, force: bool = False) -> bool:
         """Perform the cleanup operation."""
-        print("🧹 JaySoft:DBMocker Repository Cleanup")
+        print("🧹 JaySoft-DBMocker Repository Cleanup")
         print("=" * 50)
         print()
         
@@ -314,7 +314,7 @@ class RepositoryCleanup:
 def main():
     """Main entry point for the cleanup script."""
     parser = argparse.ArgumentParser(
-        description="Clean up JaySoft:DBMocker repository by removing gitignore-compliant files",
+        description="Clean up JaySoft-DBMocker repository by removing gitignore-compliant files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

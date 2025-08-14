@@ -110,12 +110,12 @@ class ToolTip:
 
 
 class DBMockerGUI:
-    """Main GUI application for JaySoft:DBMocker."""
+    """Main GUI application for JaySoft-DBMocker."""
     
     def __init__(self, root: tk.Tk):
         """Initialize the GUI application."""
         self.root = root
-        self.root.title("JaySoft:DBMocker - Database Mock Data Generator")
+        self.root.title("JaySoft-DBMocker - Database Mock Data Generator")
         
         # Cross-platform window configuration
         self.configure_cross_platform_window()
@@ -838,7 +838,7 @@ class DBMockerGUI:
         self.done_button.pack(side=tk.RIGHT, padx=(0, 5))
         
         # Add tooltip
-        ToolTip(self.done_button, "Close JaySoft:DBMocker application:\n• Safely terminates all connections\n• Stops any running operations\n• Exits the application")
+        ToolTip(self.done_button, "Close JaySoft-DBMocker application:\n• Safely terminates all connections\n• Stops any running operations\n• Exits the application")
         
         # Add about button for additional info
         self.about_button = ttk.Button(button_frame, text="ℹ️ About", 
@@ -886,7 +886,7 @@ class DBMockerGUI:
         """Show application about dialog."""
         # Create custom about dialog with logo
         about_window = tk.Toplevel(self.root)
-        about_window.title("About JaySoft:DBMocker")
+        about_window.title("About JaySoft-DBMocker")
         about_window.geometry("500x600")
         about_window.resizable(False, False)
         about_window.transient(self.root)
@@ -912,7 +912,7 @@ class DBMockerGUI:
                 logo_label.pack(pady=(0, 20))
         except Exception:
             # Fallback to text if logo fails
-            title_label = ttk.Label(main_frame, text="JaySoft:DBMocker", 
+            title_label = ttk.Label(main_frame, text="JaySoft-DBMocker", 
                                    font=("Arial", 24, "bold"))
             title_label.pack(pady=(0, 20))
         
@@ -1712,7 +1712,7 @@ class GUILogHandler(logging.Handler):
 
 
 def launch_gui():
-    """Launch the JaySoft:DBMocker GUI application."""
+    """Launch the JaySoft-DBMocker GUI application."""
     root = tk.Tk()
     app = DBMockerGUI(root)
     root.mainloop()

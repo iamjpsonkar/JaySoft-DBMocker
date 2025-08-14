@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jaysoft-dbmocker"
 version = "1.0.0"
-description = "JaySoft:DBMocker - A comprehensive tool for generating realistic mock data for SQL databases"
+description = "JaySoft-DBMocker - A comprehensive tool for generating realistic mock data for SQL databases"
 authors = [{name = "JaySoft Development", email = "info@jaysoft.dev"}]
 readme = "README.md"
 license = {text = "MIT"}

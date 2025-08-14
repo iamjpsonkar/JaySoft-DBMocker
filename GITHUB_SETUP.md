@@ -11,7 +11,7 @@
 
 ```
 Name: JaySoft-DBMocker
-Description: 🎲 JaySoft:DBMocker - A comprehensive, production-ready tool for generating realistic mock data for SQL databases. Features intelligent schema analysis, constraint-aware data generation, and high-performance bulk operations.
+Description: 🎲 JaySoft-DBMocker - A comprehensive, production-ready tool for generating realistic mock data for SQL databases. Features intelligent schema analysis, constraint-aware data generation, and high-performance bulk operations.
 Website: https://iamjpsonkar.github.io/JaySoft-DBMocker
 Topics: database, mock-data, sql, python, cli, gui, jaysoft, data-generation, testing, faker, sqlalchemy
 License: MIT License
@@ -36,7 +36,7 @@ cd /Users/jsonkar/DBMocker
 # Initialize git repository
 git init
 git add .
-git commit -m "🎉 Initial commit: JaySoft:DBMocker v1.0.0
+git commit -m "🎉 Initial commit: JaySoft-DBMocker v1.0.0
 
 ✨ Features:
 - Intelligent database schema analysis

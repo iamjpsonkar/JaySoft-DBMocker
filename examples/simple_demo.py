@@ -1,4 +1,4 @@
-"""Simple demo setup for JaySoft:DBMocker."""
+"""Simple demo setup for JaySoft-DBMocker."""
 
 import sqlite3
 import os
