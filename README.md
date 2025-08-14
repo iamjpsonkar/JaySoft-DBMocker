@@ -514,7 +514,7 @@ For detailed usage instructions, see [docs/CLEANUP.md](docs/CLEANUP.md).
 -   **Documentation**: [https://iamjpsonkar.github.io/JaySoft-DBMocker](https://iamjpsonkar.github.io/JaySoft-DBMocker)
 -   **Issues**: [GitHub Issues](https://github.com/iamjpsonkar/JaySoft-DBMocker/issues)
 -   **Discussions**: [GitHub Discussions](https://github.com/iamjpsonkar/JaySoft-DBMocker/discussions)
--   **Email**: [support@jaysoft.dev](mailto:support@jaysoft.dev)
+-   **Email**: [iamjpsonkar@gmail.com](mailto:iamjpsonkar@gmail.com)
 
 ---
 
