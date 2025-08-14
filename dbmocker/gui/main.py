@@ -381,12 +381,31 @@ class DBMockerGUI:
         self.table_tree.column("columns", width=100)
         self.table_tree.column("foreign_keys", width=100)
         
-        # Scrollbar
-        scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.table_tree.yview)
-        self.table_tree.configure(yscrollcommand=scrollbar.set)
+        # Create scrollable container for table tree
+        tree_container = ttk.Frame(table_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
         
-        self.table_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Vertical scrollbar
+        v_scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.table_tree.yview)
+        self.table_tree.configure(yscrollcommand=v_scrollbar.set)
+        
+        # Horizontal scrollbar
+        h_scrollbar = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.table_tree.xview)
+        self.table_tree.configure(xscrollcommand=h_scrollbar.set)
+        
+        # Pack tree and scrollbars
+        self.table_tree.grid(row=0, column=0, sticky="nsew")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        # Configure grid weights
+        tree_container.grid_rowconfigure(0, weight=1)
+        tree_container.grid_columnconfigure(0, weight=1)
+        
+        # Add mouse wheel scrolling
+        def on_mousewheel(event):
+            self.table_tree.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.table_tree.bind("<MouseWheel>", on_mousewheel)
         
         # Bind selection event
         self.table_tree.bind("<<TreeviewSelect>>", self.on_table_select)
@@ -477,11 +496,31 @@ class DBMockerGUI:
         self.config_tree.column("rows", width=110)
         self.config_tree.column("status", width=100)
         
-        config_scrollbar = ttk.Scrollbar(table_config_frame, orient=tk.VERTICAL, command=self.config_tree.yview)
-        self.config_tree.configure(yscrollcommand=config_scrollbar.set)
+        # Create scrollable container for config tree
+        config_tree_container = ttk.Frame(table_config_frame)
+        config_tree_container.pack(fill=tk.BOTH, expand=True)
         
-        self.config_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        config_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Vertical scrollbar
+        config_v_scrollbar = ttk.Scrollbar(config_tree_container, orient=tk.VERTICAL, command=self.config_tree.yview)
+        self.config_tree.configure(yscrollcommand=config_v_scrollbar.set)
+        
+        # Horizontal scrollbar
+        config_h_scrollbar = ttk.Scrollbar(config_tree_container, orient=tk.HORIZONTAL, command=self.config_tree.xview)
+        self.config_tree.configure(xscrollcommand=config_h_scrollbar.set)
+        
+        # Pack tree and scrollbars using grid
+        self.config_tree.grid(row=0, column=0, sticky="nsew")
+        config_v_scrollbar.grid(row=0, column=1, sticky="ns")
+        config_h_scrollbar.grid(row=1, column=0, sticky="ew")
+        
+        # Configure grid weights
+        config_tree_container.grid_rowconfigure(0, weight=1)
+        config_tree_container.grid_columnconfigure(0, weight=1)
+        
+        # Add mouse wheel scrolling
+        def on_config_mousewheel(event):
+            self.config_tree.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.config_tree.bind("<MouseWheel>", on_config_mousewheel)
         
         # Bind clicks for interactions
         self.config_tree.bind("<Double-1>", self.toggle_table_mode)
@@ -537,6 +576,11 @@ class DBMockerGUI:
         
         self.results_text = scrolledtext.ScrolledText(results_frame, height=10, state=tk.DISABLED)
         self.results_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Enhanced mouse wheel scrolling for results
+        def on_results_mousewheel(event):
+            self.results_text.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.results_text.bind("<MouseWheel>", on_results_mousewheel)
     
     def setup_logs_tab(self):
         """Setup logs tab."""
@@ -558,6 +602,11 @@ class DBMockerGUI:
         # Log display
         self.log_text = scrolledtext.ScrolledText(main_frame, height=20, state=tk.DISABLED)
         self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Enhanced mouse wheel scrolling for logs
+        def on_logs_mousewheel(event):
+            self.log_text.yview_scroll(int(-1*(event.delta/120)), "units")
+        self.log_text.bind("<MouseWheel>", on_logs_mousewheel)
     
     def setup_logging(self):
         """Setup logging to display in GUI."""
