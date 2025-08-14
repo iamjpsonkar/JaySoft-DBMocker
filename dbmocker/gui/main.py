@@ -1007,12 +1007,13 @@ class DBMockerGUI:
                 # Update status for tables with FK dependencies to unselected tables
                 for item in self.config_tree.get_children():
                     values = list(self.config_tree.item(item, "values"))
-                    table_name = values[0]
-                    mode = values[1]
+                    selected = values[0] == "☑️"  # Check if selected
+                    table_name = values[1]  # Table name at index 1
+                    mode = values[2]  # Mode at index 2
                     
-                    if table_name in fk_dependencies and mode == "Generate New":
+                    if selected and table_name in fk_dependencies and mode == "Generate New":
                         referenced_tables = fk_dependencies[table_name]
-                        values[3] = f"FK→{','.join(referenced_tables[:2])}{'...' if len(referenced_tables) > 2 else ''}"
+                        values[4] = f"FK→{','.join(referenced_tables[:2])}{'...' if len(referenced_tables) > 2 else ''}"  # Status at index 4
                         self.config_tree.item(item, values=values)
                 
                 # Show summary in a popup
@@ -1861,12 +1862,13 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 for item in self.config_tree.get_children():
                     values = self.config_tree.item(item, "values")
-                    table_name = values[0]
-                    mode = values[1]
-                    rows_to_generate = int(values[2])
+                    selected = values[0] == "☑️"  # Check if selected
+                    table_name = values[1]  # Table name at index 1
+                    mode = values[2]  # Mode at index 2
+                    rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
                     
-                    # Only include tables that exist in schema
-                    if table_name in schema_table_names:
+                    # Only include selected tables that exist in schema
+                    if selected and table_name in schema_table_names:
                         if mode == "Use Existing":
                             use_existing_tables.append(table_name)
                             # Don't add to table_configs as we're using existing data
@@ -1909,9 +1911,10 @@ Enterprise-grade mock data generation for professional development.'''
                             processing_order.append((f"Batch {batch_num}", batch_tables))
                 else:
                     # Use GUI order (legacy mode)
-                    gui_order = [item[0] for item in [(self.config_tree.item(item, "values")[0], 
-                                                     int(self.config_tree.item(item, "values")[1])) 
-                                                    for item in self.config_tree.get_children()] 
+                    gui_order = [item[0] for item in [(self.config_tree.item(item, "values")[1], 
+                                                     int(self.config_tree.item(item, "values")[3]) if self.config_tree.item(item, "values")[3].isdigit() else 0) 
+                                                    for item in self.config_tree.get_children()
+                                                    if self.config_tree.item(item, "values")[0] == "☑️"] 
                                if item[1] > 0 and item[0] in table_configs]
                     processing_order = [("GUI Order", gui_order)]
                     
