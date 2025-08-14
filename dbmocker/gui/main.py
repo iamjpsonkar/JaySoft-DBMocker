@@ -9,6 +9,7 @@ import platform
 import sys
 from typing import Optional, Dict, Any
 import json
+from pathlib import Path
 from sqlalchemy import text
 
 from dbmocker.core.database import DatabaseConnection, DatabaseConfig
@@ -167,21 +168,26 @@ class DBMockerGUI:
     def set_application_icon(self):
         """Set application icon for different platforms."""
         try:
+            base_path = Path(__file__).parent.parent.parent / "assets" / "logos"
             system = platform.system()
+            
             if system == "Windows":
                 # Windows .ico format
                 try:
-                    self.root.iconbitmap('icon.ico')
+                    icon_path = base_path / "jaysoft_dbmocker_logo.ico"
+                    if icon_path.exists():
+                        self.root.iconbitmap(str(icon_path))
                 except tk.TclError:
                     pass  # Icon file not found, continue without icon
-            elif system == "Linux":
-                # Linux .png format
+            elif system in ["Linux", "Darwin"]:  # Linux and macOS
+                # PNG format for Linux and macOS
                 try:
-                    icon = tk.PhotoImage(file='icon.png')
-                    self.root.iconphoto(True, icon)
+                    icon_path = base_path / "jaysoft_dbmocker_icon.png"
+                    if icon_path.exists():
+                        icon = tk.PhotoImage(file=str(icon_path))
+                        self.root.iconphoto(True, icon)
                 except tk.TclError:
                     pass  # Icon file not found, continue without icon
-            # macOS doesn't typically use custom icons in Tkinter
         except Exception:
             pass  # Continue without icon if any error occurs
     
@@ -229,10 +235,26 @@ class DBMockerGUI:
         main_frame = ttk.Frame(self.connection_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
+        # Logo and Title
+        logo_frame = ttk.Frame(main_frame)
+        logo_frame.pack(pady=(0, 20))
+        
+        # Try to load and display logo
+        try:
+            logo_path = Path(__file__).parent.parent.parent / "assets" / "logos" / "jaysoft_dbmocker_header.png"
+            if logo_path.exists():
+                from tkinter import PhotoImage
+                self.logo_image = PhotoImage(file=str(logo_path))
+                logo_label = ttk.Label(logo_frame, image=self.logo_image)
+                logo_label.pack(pady=(0, 10))
+        except Exception:
+            # Fallback to text title if logo loading fails
+            pass
+        
         # Title
-        title_label = ttk.Label(main_frame, text="Database Connection", 
+        title_label = ttk.Label(logo_frame, text="Database Connection", 
                                font=("Arial", 16, "bold"))
-        title_label.pack(pady=(0, 20))
+        title_label.pack()
         
         # Connection form
         form_frame = ttk.LabelFrame(main_frame, text="Connection Details", padding=20)
@@ -862,8 +884,40 @@ class DBMockerGUI:
     
     def show_about_dialog(self):
         """Show application about dialog."""
-        about_text = f'''JaySoft:DBMocker
-Database Mock Data Generator
+        # Create custom about dialog with logo
+        about_window = tk.Toplevel(self.root)
+        about_window.title("About JaySoft:DBMocker")
+        about_window.geometry("500x600")
+        about_window.resizable(False, False)
+        about_window.transient(self.root)
+        about_window.grab_set()
+        
+        # Center the dialog
+        about_window.update_idletasks()
+        x = (about_window.winfo_screenwidth() // 2) - (500 // 2)
+        y = (about_window.winfo_screenheight() // 2) - (600 // 2)
+        about_window.geometry(f"500x600+{x}+{y}")
+        
+        # Main frame
+        main_frame = ttk.Frame(about_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Logo
+        try:
+            logo_path = Path(__file__).parent.parent.parent / "assets" / "logos" / "jaysoft_dbmocker_logo.png"
+            if logo_path.exists():
+                about_logo = tk.PhotoImage(file=str(logo_path))
+                logo_label = ttk.Label(main_frame, image=about_logo)
+                logo_label.image = about_logo  # Keep a reference
+                logo_label.pack(pady=(0, 20))
+        except Exception:
+            # Fallback to text if logo fails
+            title_label = ttk.Label(main_frame, text="JaySoft:DBMocker", 
+                                   font=("Arial", 24, "bold"))
+            title_label.pack(pady=(0, 20))
+        
+        # About text
+        about_text = f'''Database Mock Data Generator
 
 Version: 2.0.0
 Platform: {platform.system()} {platform.release()}
@@ -883,7 +937,13 @@ Architecture: {platform.machine()}
 
 Enterprise-grade mock data generation for professional development.'''
         
-        messagebox.showinfo("About JaySoft:DBMocker", about_text)
+        text_label = ttk.Label(main_frame, text=about_text, justify=tk.CENTER)
+        text_label.pack(pady=(0, 20))
+        
+        # Close button
+        close_button = ttk.Button(main_frame, text="Close", 
+                                 command=about_window.destroy)
+        close_button.pack(pady=10)
     
     def toggle_seed_entry(self):
         """Toggle seed entry based on checkbox."""
