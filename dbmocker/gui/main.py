@@ -870,6 +870,98 @@ class DBMockerGUI:
         
         return True
     
+    def _get_duplicate_allowed_columns(self, table_name: str) -> list:
+        """Get all columns that can safely have duplicate values based on schema constraints."""
+        if not hasattr(self, 'schema') or not self.schema:
+            return []
+        
+        table = self.schema.get_table(table_name)
+        if not table:
+            return []
+        
+        duplicate_allowed_columns = []
+        
+        # Get constraint information
+        primary_key_columns = table.get_primary_key_columns()
+        unique_columns = set()
+        auto_increment_columns = set()
+        
+        # Collect unique constraint columns
+        for constraint in table.constraints:
+            if constraint.type.value == 'unique':
+                unique_columns.update(constraint.columns)
+        
+        # Collect auto-increment columns
+        for column in table.columns:
+            if column.is_auto_increment:
+                auto_increment_columns.add(column.name)
+        
+        # Check each column for duplicate eligibility
+        for column in table.columns:
+            can_have_duplicates = True
+            
+            # Skip if column is primary key
+            if column.name in primary_key_columns:
+                can_have_duplicates = False
+            
+            # Skip if column has unique constraint
+            elif column.name in unique_columns:
+                can_have_duplicates = False
+            
+            # Skip if column is auto-increment
+            elif column.name in auto_increment_columns:
+                can_have_duplicates = False
+            
+            # Skip if column is part of a composite unique constraint
+            else:
+                for constraint in table.constraints:
+                    if (constraint.type.value == 'unique' and 
+                        len(constraint.columns) > 1 and 
+                        column.name in constraint.columns):
+                        can_have_duplicates = False
+                        break
+            
+            if can_have_duplicates:
+                duplicate_allowed_columns.append(column.name)
+        
+        return duplicate_allowed_columns
+    
+    def _show_duplicate_columns_info(self, table_name: str, duplicate_mode: str):
+        """Show information about which columns will be affected by duplicate mode."""
+        duplicate_allowed_columns = self._get_duplicate_allowed_columns(table_name)
+        
+        if not duplicate_allowed_columns:
+            tk.messagebox.showinfo(
+                f"Duplicate Mode: {duplicate_mode}",
+                f"Table '{table_name}' has no columns that can safely have duplicate values.\n\n"
+                f"Reasons columns may be excluded:\n"
+                f"• Primary key columns\n"
+                f"• Columns with unique constraints\n"
+                f"• Auto-increment columns\n"
+                f"• Columns in composite unique constraints\n\n"
+                f"The duplicate mode will have no effect on this table."
+            )
+        else:
+            # Organize columns for better display
+            column_list = ", ".join(duplicate_allowed_columns)
+            if len(duplicate_allowed_columns) > 10:
+                # Show first 10 and count
+                shown_columns = ", ".join(duplicate_allowed_columns[:10])
+                column_list = f"{shown_columns} ... and {len(duplicate_allowed_columns) - 10} more"
+            
+            mode_description = {
+                "Allow Duplicates": "All rows will have the same value for these columns",
+                "Smart Duplicates": "Limited set of values with controlled probability distribution"
+            }
+            
+            tk.messagebox.showinfo(
+                f"Duplicate Mode: {duplicate_mode}",
+                f"✅ Table '{table_name}' - {duplicate_mode} mode activated\n\n"
+                f"📋 Columns that will have duplicate values:\n{column_list}\n\n"
+                f"🎯 How it works:\n{mode_description.get(duplicate_mode, '')}\n\n"
+                f"ℹ️ Total columns affected: {len(duplicate_allowed_columns)} out of {len(self.schema.get_table(table_name).columns) if self.schema.get_table(table_name) else '?'} total columns"
+            )
+    
     def validate_current_tab(self):
         """Validate the current tab before allowing navigation."""
         current_tab = self.notebook.index(self.notebook.select())
@@ -932,16 +1024,22 @@ class DBMockerGUI:
             
         elif column == "#4":  # Duplicate Mode column
             current_duplicate_mode = values[3]  # Duplicate mode is at index 3
+            table_name = values[1]  # Table name at index 1
             
             # Cycle through duplicate modes
             if current_duplicate_mode == "Generate New":
-                values[3] = "Allow Duplicates"
+                new_mode = "Allow Duplicates"
             elif current_duplicate_mode == "Allow Duplicates":
-                values[3] = "Smart Duplicates"
+                new_mode = "Smart Duplicates"
             else:  # Smart Duplicates
-                values[3] = "Generate New"
+                new_mode = "Generate New"
             
+            values[3] = new_mode
             self.config_tree.item(item, values=values)
+            
+            # Show which columns will be affected by duplicate mode
+            if new_mode != "Generate New":
+                self._show_duplicate_columns_info(table_name, new_mode)
     
     def select_all_for_generation(self):
         """Set all tables to Generate New mode with default rows."""
@@ -2221,16 +2319,23 @@ Enterprise-grade mock data generation for professional development.'''
                 
                 # Add duplicate mode configurations from GUI
                 if duplicate_mode and duplicate_mode != "Generate New":
-                    # Apply duplicate mode to common columns that benefit from duplication
-                    common_duplicate_columns = ['status', 'category', 'type', 'state', 'priority', 'region', 'department']
+                    # Automatically detect all columns that can safely have duplicates
+                    duplicate_allowed_columns = self._get_duplicate_allowed_columns(table_name)
                     
-                    for common_col in common_duplicate_columns:
+                    # Store duplicate info for logging during generation (safer for threading)
+                    if not hasattr(table_config, '_duplicate_info'):
+                        table_config._duplicate_info = {
+                            'mode': duplicate_mode,
+                            'columns': duplicate_allowed_columns
+                        }
+                    
+                    for column_name in duplicate_allowed_columns:
                         if duplicate_mode == "Allow Duplicates":
-                            table_config.column_configs[common_col] = ColumnGenerationConfig(
+                            table_config.column_configs[column_name] = ColumnGenerationConfig(
                                 duplicate_mode="allow_duplicates"
                             )
                         elif duplicate_mode == "Smart Duplicates":
-                            table_config.column_configs[common_col] = ColumnGenerationConfig(
+                            table_config.column_configs[column_name] = ColumnGenerationConfig(
                                 duplicate_mode="smart_duplicates",
                                 duplicate_probability=0.7,
                                 max_duplicate_values=5
