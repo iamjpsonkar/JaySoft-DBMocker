@@ -9,6 +9,7 @@ import platform
 import sys
 from typing import Optional, Dict, Any
 import json
+from sqlalchemy import text
 
 from dbmocker.core.database import DatabaseConnection, DatabaseConfig
 from dbmocker.core.analyzer import SchemaAnalyzer
@@ -259,12 +260,25 @@ class DBMockerGUI:
         port_entry.grid(row=2, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
         ToolTip(port_entry, "Database server port number:\n• MySQL: 3306 (default)\n• PostgreSQL: 5432 (default)\n• Custom ports as configured")
         
-        # Database
+        # Database selection
         ttk.Label(form_frame, text="Database:").grid(row=3, column=0, sticky=tk.W, pady=5)
+        
+        # Database selection frame to hold combobox and refresh button
+        db_frame = ttk.Frame(form_frame)
+        db_frame.grid(row=3, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
+        db_frame.columnconfigure(0, weight=1)
+        
         self.database_var = tk.StringVar()
-        database_entry = ttk.Entry(form_frame, textvariable=self.database_var)
-        database_entry.grid(row=3, column=1, sticky=tk.EW, pady=5, padx=(10, 0))
-        ToolTip(database_entry, "Name of the database to connect to:\n• Must exist on the server\n• Contains the tables you want to mock")
+        self.database_combo = ttk.Combobox(db_frame, textvariable=self.database_var, state="readonly")
+        self.database_combo.grid(row=0, column=0, sticky=tk.EW, padx=(0, 5))
+        ToolTip(self.database_combo, "Select database from server:\n• List populated after successful connection\n• Shows all databases you have access to\n• Examples: gringotts_v2, gringotts_test, etc.")
+        
+        # Refresh databases button
+        self.refresh_db_button = ttk.Button(db_frame, text="🔄", width=3, 
+                                           command=self.refresh_databases)
+        self.refresh_db_button.grid(row=0, column=1)
+        self.refresh_db_button.config(state=tk.DISABLED)  # Initially disabled
+        ToolTip(self.refresh_db_button, "Refresh database list:\n• Reconnects to server\n• Updates available databases\n• Use after database changes on server")
         
         # Username
         ttk.Label(form_frame, text="Username:").grid(row=4, column=0, sticky=tk.W, pady=5)
@@ -286,15 +300,15 @@ class DBMockerGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
         
-        self.connect_button = ttk.Button(button_frame, text="Test Connection", 
+        self.connect_button = ttk.Button(button_frame, text="Connect & List Databases", 
                                         command=self.test_connection)
         self.connect_button.pack(side=tk.LEFT)
-        ToolTip(self.connect_button, "Test database connection without analyzing schema:\n• Validates connection parameters\n• Quick connectivity check\n• Does not perform schema analysis")
+        ToolTip(self.connect_button, "Connect to server and list databases:\n• Validates connection parameters\n• Fetches available databases\n• Populates database selection dropdown")
         
-        self.analyze_button = ttk.Button(button_frame, text="Connect & Analyze Schema", 
+        self.analyze_button = ttk.Button(button_frame, text="Analyze Selected Database", 
                                         command=self.connect_and_analyze, state=tk.DISABLED)
         self.analyze_button.pack(side=tk.LEFT, padx=(10, 0))
-        ToolTip(self.analyze_button, "Connect to database and analyze schema:\n• Discovers all tables and columns\n• Analyzes constraints and relationships\n• Enables data generation features")
+        ToolTip(self.analyze_button, "Analyze selected database schema:\n• Connects to selected database\n• Analyzes all tables and relationships\n• Populates schema information for generation")
         
         # Status
         self.connection_status = ttk.Label(main_frame, text="Not connected", foreground="red")
@@ -486,23 +500,53 @@ class DBMockerGUI:
         logging.getLogger().addHandler(self.log_handler)
     
     def test_connection(self):
-        """Test database connection."""
+        """Test database connection and fetch available databases."""
         try:
-            config = self.get_db_config()
-            with DatabaseConnection(config) as db_conn:
-                if db_conn.test_connection():
-                    self.connection_status.config(text="✅ Connection successful", foreground="green")
-                    self.analyze_button.config(state=tk.NORMAL)
-                    messagebox.showinfo("Success", "Database connection successful!")
-                else:
-                    raise ConnectionError("Connection test failed")
+            # Get basic connection config without database name
+            config = self.get_db_config(for_server_connection=True)
+            
+            # Test connection and fetch databases
+            databases = self.fetch_available_databases(config)
+            
+            if databases:
+                # Update database dropdown
+                self.database_combo['values'] = databases
+                self.database_combo.config(state="readonly")
+                
+                # If current database is in the list, select it
+                current_db = self.database_var.get()
+                if current_db and current_db in databases:
+                    self.database_var.set(current_db)
+                elif databases:
+                    self.database_var.set(databases[0])  # Select first database by default
+                
+                # Enable controls
+                self.connection_status.config(text=f"✅ Connected - {len(databases)} databases found", foreground="green")
+                self.analyze_button.config(state=tk.NORMAL)
+                self.refresh_db_button.config(state=tk.NORMAL)
+                
+                messagebox.showinfo("Success", f"Connected successfully!\nFound {len(databases)} databases:\n" + 
+                                   "\n".join(databases[:10]) + ("..." if len(databases) > 10 else ""))
+            else:
+                raise ConnectionError("No databases found or no access granted")
+                
         except Exception as e:
             self.connection_status.config(text="❌ Connection failed", foreground="red")
             self.analyze_button.config(state=tk.DISABLED)
+            self.refresh_db_button.config(state=tk.DISABLED)
+            self.database_combo['values'] = []
+            self.database_var.set("")
             messagebox.showerror("Connection Error", str(e))
     
     def connect_and_analyze(self):
         """Connect to database and analyze schema."""
+        # Check if a database is selected
+        if not self.database_var.get():
+            messagebox.showerror("No Database Selected", 
+                               "Please select a database from the dropdown first.\n\n" +
+                               "If the dropdown is empty, click 'Connect & List Databases' to populate it.")
+            return
+            
         def analyze_task():
             try:
                 config = self.get_db_config()
@@ -1418,16 +1462,77 @@ Enterprise-grade mock data generation for professional development.'''
         
         return config
     
-    def get_db_config(self) -> DatabaseConfig:
+    def get_db_config(self, for_server_connection=False) -> DatabaseConfig:
         """Get database configuration from GUI inputs."""
         return DatabaseConfig(
             host=self.host_var.get(),
             port=int(self.port_var.get()),
-            database=self.database_var.get(),
+            database="" if for_server_connection else self.database_var.get(),
             username=self.username_var.get(),
             password=self.password_var.get(),
             driver=self.driver_var.get()
         )
+    
+    def fetch_available_databases(self, config: DatabaseConfig) -> list:
+        """Fetch list of available databases from the server."""
+        try:
+            # Create a temporary connection to fetch database list
+            temp_conn = DatabaseConnection(config)
+            
+            databases = []
+            with temp_conn.get_session() as session:
+                if config.driver == "mysql":
+                    result = session.execute(text("SHOW DATABASES"))
+                    databases = [row[0] for row in result if row[0] not in 
+                               ['information_schema', 'performance_schema', 'mysql', 'sys']]
+                elif config.driver == "postgresql":
+                    result = session.execute(text("""
+                        SELECT datname FROM pg_database 
+                        WHERE datistemplate = false AND datname != 'postgres'
+                        ORDER BY datname
+                    """))
+                    databases = [row[0] for row in result]
+                elif config.driver == "sqlite":
+                    # For SQLite, we can't list databases like this, return empty or handle differently
+                    databases = []
+                else:
+                    raise ValueError(f"Unsupported database driver: {config.driver}")
+            
+            temp_conn.close()
+            return sorted(databases)
+            
+        except Exception as e:
+            raise ConnectionError(f"Failed to fetch databases: {str(e)}")
+    
+    def refresh_databases(self):
+        """Refresh the database list."""
+        try:
+            # Get current connection config
+            config = self.get_db_config(for_server_connection=True)
+            
+            # Fetch databases
+            databases = self.fetch_available_databases(config)
+            
+            if databases:
+                # Remember current selection
+                current_selection = self.database_var.get()
+                
+                # Update dropdown
+                self.database_combo['values'] = databases
+                
+                # Restore selection if still valid
+                if current_selection and current_selection in databases:
+                    self.database_var.set(current_selection)
+                elif databases:
+                    self.database_var.set(databases[0])
+                
+                self.connection_status.config(text=f"✅ Refreshed - {len(databases)} databases found", foreground="green")
+                messagebox.showinfo("Success", f"Database list refreshed!\nFound {len(databases)} databases.")
+            else:
+                raise ConnectionError("No databases found")
+                
+        except Exception as e:
+            messagebox.showerror("Refresh Error", f"Failed to refresh database list:\n{str(e)}")
     
     def on_table_select(self, event):
         """Handle table selection in schema tab."""
