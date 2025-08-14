@@ -1630,73 +1630,7 @@ Enterprise-grade mock data generation for professional development.'''
         
         return config
     
-    def build_generation_config(self):
-        """Build generation configuration from GUI settings."""
-        # Start with base config
-        config = GenerationConfig(
-            batch_size=int(self.batch_size_var.get()),
-            truncate_existing=self.truncate_var.get()
-        )
-        
-        # Add seed if enabled
-        if hasattr(self, 'use_seed_var') and self.use_seed_var.get():
-            try:
-                config.seed = int(self.seed_var.get())
-            except (ValueError, AttributeError):
-                pass
-        
-        # Add table filtering if specified
-        if hasattr(self, 'include_tables_var') and self.include_tables_var.get().strip():
-            include_tables = [t.strip() for t in self.include_tables_var.get().split(',') if t.strip()]
-            config.include_tables = include_tables
-        
-        if hasattr(self, 'exclude_tables_var') and self.exclude_tables_var.get().strip():
-            exclude_tables = [t.strip() for t in self.exclude_tables_var.get().split(',') if t.strip()]
-            config.exclude_tables = exclude_tables
-        
-        # Add pattern analysis options if available
-        if hasattr(self, 'analyze_existing_data_var'):
-            config.analyze_existing_data = self.analyze_existing_data_var.get()
-        
-        if hasattr(self, 'pattern_sample_size_var'):
-            try:
-                config.pattern_sample_size = int(self.pattern_sample_size_var.get())
-            except (ValueError, AttributeError):
-                config.pattern_sample_size = 1000
-        
-        # Add generation mode preference
-        if hasattr(self, 'generation_mode_var'):
-            config.generation_mode = self.generation_mode_var.get()
-        
-        # Add advanced options
-        if hasattr(self, 'show_dependency_plan_var'):
-            config.show_dependency_plan = self.show_dependency_plan_var.get()
-        
-        if hasattr(self, 'show_table_specs_var'):
-            config.show_table_specs = self.show_table_specs_var.get()
-        
-        if hasattr(self, 'max_tables_shown_var'):
-            try:
-                config.max_tables_shown = int(self.max_tables_shown_var.get())
-            except (ValueError, AttributeError):
-                config.max_tables_shown = 5
-        
-        # Extract table configurations from tree
-        if hasattr(self, 'config_tree'):
-            for item in self.config_tree.get_children():
-                values = self.config_tree.item(item, "values")
-                selected = values[0] == "☑️"  # Check if selected
-                table_name = values[1]  # Table name at index 1
-                mode = values[2]  # Mode at index 2
-                rows_to_generate = int(values[3]) if values[3].isdigit() else 0  # Rows at index 3
-                
-                if selected and rows_to_generate > 0:
-                    config.table_configs[table_name] = TableGenerationConfig(
-                        rows_to_generate=rows_to_generate,
-                        use_existing_data=mode == "Use Existing"
-                    )
-        
-        return config
+
     
     def start_generation(self):
         """Start data generation process."""
