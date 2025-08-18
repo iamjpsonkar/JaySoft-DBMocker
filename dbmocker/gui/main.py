@@ -2355,13 +2355,16 @@ Enterprise-grade mock data generation for professional development.'''
                     # Create specification-driven generator
                     spec_generator = SpecificationDrivenGenerator(self.db_connection, table_specs)
                 else:
-                    # Use enhanced generator if parallel processing is enabled
+                    # Use enhanced generator for better constraint handling
                     if use_parallel:
                         from dbmocker.core.parallel_generator import ParallelDataGenerator
                         generator = ParallelDataGenerator(self.schema, config, self.db_connection)
                         self.result_queue.put(("progress", "🚀 Using parallel data generator"))
                     else:
-                        generator = DataGenerator(self.schema, config)
+                        # Use EnhancedDataGenerator instead of basic DataGenerator
+                        from dbmocker.core.parallel_generator import EnhancedDataGenerator
+                        generator = EnhancedDataGenerator(self.schema, config, self.db_connection)
+                        self.result_queue.put(("progress", "🔧 Using enhanced data generator with improved constraint handling"))
                     table_specs = None
                     spec_generator = None
                 

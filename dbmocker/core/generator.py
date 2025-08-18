@@ -68,6 +68,38 @@ class DataGenerator:
         """Build custom generator functions."""
         return {}
     
+    def _generate_fallback_value_for_not_null_column(self, column: ColumnInfo) -> Any:
+        """Generate a safe fallback value for NOT NULL columns when other methods fail."""
+        logger.info(f"Generating fallback value for NOT NULL column {column.name} ({column.data_type})")
+        
+        # Generate based on data type with guaranteed non-null values
+        if column.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
+            return 1
+        elif column.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
+            return 1.0
+        elif column.data_type == ColumnType.BOOLEAN:
+            return 0
+        elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
+            # Generate meaningful fallback based on column name
+            column_name = column.name.lower()
+            if 'id' in column_name:
+                return f"default_id_{random.randint(1, 1000)}"
+            elif 'name' in column_name:
+                return f"default_name_{random.randint(1, 100)}"
+            elif 'email' in column_name:
+                return f"fallback{random.randint(1, 1000)}@example.com"
+            else:
+                return f"default_value_{random.randint(1, 1000)}"
+        elif column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP]:
+            return datetime.now()
+        elif column.data_type == ColumnType.DATE:
+            return date.today()
+        elif column.data_type == ColumnType.TIME:
+            return datetime.now().time()
+        else:
+            # Universal fallback
+            return f"fallback_value_{random.randint(1, 1000)}"
+    
     def set_stop_flag(self, stop_flag):
         """Set the stop flag for halting generation."""
         self.stop_flag = stop_flag
@@ -213,9 +245,14 @@ class DataGenerator:
             return self._get_default_value(column)
         
         # Handle null values (but respect NOT NULL constraint)
+        # CRITICAL: Never generate NULL for NOT NULL columns
         null_prob = column_config.null_probability if column_config else 0.0
         if column.is_nullable and random.random() < null_prob:
             return None
+        
+        # Double-check: If column is NOT NULL, ensure we never return None anywhere below
+        if not column.is_nullable:
+            logger.debug(f"Column {column.name} is NOT NULL - ensuring non-null generation")
         
         # Use custom generator if specified
         if column_config and column_config.generator_function:
@@ -256,7 +293,14 @@ class DataGenerator:
         
         # Generate based on data type with constraint validation
         logger.debug(f"Column {column.name} using constrained value generation")
-        return self._generate_constrained_value(column, column_config, table)
+        value = self._generate_constrained_value(column, column_config, table)
+        
+        # FINAL SAFETY CHECK: Never return NULL for NOT NULL columns
+        if not column.is_nullable and value is None:
+            logger.warning(f"Generated NULL for NOT NULL column {column.name}, generating fallback value")
+            value = self._generate_fallback_value_for_not_null_column(column)
+        
+        return value
     
     def _generate_by_type(self, column: ColumnInfo, 
                          config: Optional[ColumnGenerationConfig],

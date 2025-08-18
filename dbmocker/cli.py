@@ -281,15 +281,19 @@ def generate(host: str, port: int, database: str, username: str, password: str,
                 pattern_sample_size=pattern_sample_size
             )
             
-            # Initialize components (use parallel generator if multiprocessing is enabled)
+            # Initialize components (use enhanced generators for better constraint handling)
             if enable_multiprocessing or max_workers > 1:
                 from dbmocker.core.parallel_generator import ParallelDataGenerator, ParallelDataInserter
                 generator = ParallelDataGenerator(schema, generation_config, db_conn)
                 inserter = ParallelDataInserter(db_conn, schema)
                 click.echo(f"🚀 Using parallel processing: MP={enable_multiprocessing}, Workers={max_workers}")
             else:
-                generator = DataGenerator(schema, generation_config, db_conn)
+                # Use enhanced DataGenerator with better constraint handling
+                from dbmocker.core.parallel_generator import EnhancedDataGenerator
+                from dbmocker.core.inserter import DataInserter
+                generator = EnhancedDataGenerator(schema, generation_config, db_conn)
                 inserter = DataInserter(db_conn, schema)
+                click.echo("🔧 Using enhanced data generator with improved constraint handling")
             
             # Sort tables by dependencies
             dependencies = schema.get_table_dependencies()
