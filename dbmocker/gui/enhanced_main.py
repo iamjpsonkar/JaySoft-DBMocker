@@ -1570,15 +1570,16 @@ class EnhancedDBMockerGUI:
             self.progress_monitor.complete(total_time, total_generated)
             
             # Show completion message
-            self.root.after(0, lambda: messagebox.showinfo(
-                "Generation Complete",
+            completion_message = (
                 f"Successfully generated {total_generated:,} rows in {total_time:.2f} seconds!\n"
                 f"Average rate: {avg_rate:,.0f} rows/second"
-            ))
+            )
+            self.root.after(0, lambda msg=completion_message: messagebox.showinfo("Generation Complete", msg))
         
         except Exception as e:
-            self.log_message(f"❌ Generation failed: {str(e)}")
-            self.root.after(0, lambda: messagebox.showerror("Generation Error", f"Generation failed: {str(e)}"))
+            error_message = f"Generation failed: {str(e)}"
+            self.log_message(f"❌ {error_message}")
+            self.root.after(0, lambda msg=error_message: messagebox.showerror("Generation Error", msg))
         
         finally:
             # Reset UI
@@ -1731,7 +1732,7 @@ class EnhancedDBMockerGUI:
         timestamp = time.strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}\n"
         
-        self.root.after(0, lambda: self.results_text.insert(tk.END, log_entry))
+        self.root.after(0, lambda entry=log_entry: self.results_text.insert(tk.END, entry))
         self.root.after(0, lambda: self.results_text.see(tk.END))
     
     def refresh_results(self):
