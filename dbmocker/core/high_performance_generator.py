@@ -135,13 +135,23 @@ class ConnectionPool:
     def execute_bulk_insert(self, query: str, data: List[Dict[str, Any]]) -> int:
         """Execute bulk insert with connection from pool."""
         with self.get_connection() as conn:
-            trans = conn.begin()
+            trans = None
             try:
+                # Only begin a new transaction if one isn't already active
+                if not conn.in_transaction():
+                    trans = conn.begin()
+                
                 result = conn.execute(text(query), data)
-                trans.commit()
+                
+                # Only commit if we started the transaction
+                if trans is not None:
+                    trans.commit()
+                
                 return len(data)
             except Exception as e:
-                trans.rollback()
+                # Only rollback if we started the transaction
+                if trans is not None:
+                    trans.rollback()
                 raise e
     
     def close(self):

@@ -56,13 +56,19 @@ class DatabaseConnection:
             connection_url = self._build_connection_url()
             logger.info(f"Connecting to {self.config.driver} database at {self.config.host}:{self.config.port}")
             
-            self._engine = create_engine(
-                connection_url,
-                echo=False,
-                pool_pre_ping=True,
-                pool_recycle=3600,
-                connect_args=self._get_connect_args()
-            )
+            # Configure engine with proper transaction isolation
+            engine_kwargs = {
+                "echo": False,
+                "pool_pre_ping": True,
+                "pool_recycle": 3600,
+                "connect_args": self._get_connect_args()
+            }
+            
+            # Add autocommit configuration for better transaction control
+            if self.config.driver != "sqlite":
+                engine_kwargs["isolation_level"] = "AUTOCOMMIT"
+            
+            self._engine = create_engine(connection_url, **engine_kwargs)
             
             # Test connection
             with self._engine.connect() as conn:

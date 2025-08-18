@@ -452,6 +452,7 @@ class UltraFastInserter:
         stmt = self.prepared_statements[table_name]
         
         with self.engine.connect() as conn:
+            # Configure database-specific optimizations
             if self.db_config.driver == 'sqlite':
                 # SQLite-specific optimizations
                 conn.execute(text("PRAGMA synchronous = OFF"))
@@ -471,14 +472,26 @@ class UltraFastInserter:
                 conn.execute(text("SET unique_checks = 0"))
                 conn.execute(text("SET foreign_key_checks = 0"))
             
-            # Execute bulk insert
-            trans = conn.begin()
+            # Execute bulk insert with proper transaction management
+            # Check if there's already an active transaction
+            trans = None
             try:
+                # Only begin a new transaction if one isn't already active
+                if not conn.in_transaction():
+                    trans = conn.begin()
+                
                 conn.execute(text(stmt), data)
-                trans.commit()
+                
+                # Only commit if we started the transaction
+                if trans is not None:
+                    trans.commit()
+                
                 return len(data)
+                
             except Exception as e:
-                trans.rollback()
+                # Only rollback if we started the transaction
+                if trans is not None:
+                    trans.rollback()
                 raise e
     
     def _quote_identifier(self, identifier: str) -> str:
