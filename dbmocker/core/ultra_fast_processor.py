@@ -250,40 +250,73 @@ class UltraFastDataGenerator:
         return strategy
     
     def _create_column_strategy(self, column) -> Dict[str, Any]:
-        """Create optimal generation strategy for column."""
+        """Create optimal generation strategy for column with proper constraint handling."""
         strategy = {
             'name': column.name,
             'type': column.data_type,
-            'method': 'default'
+            'method': 'default',
+            'nullable': column.is_nullable if hasattr(column, 'is_nullable') else True
         }
         
-        # Determine optimal generation method
+        # Analyze column name patterns for better type detection
+        column_name_lower = column.name.lower()
+        
+        # Handle boolean columns (including common boolean-like names)
+        if (column.data_type == ColumnType.BOOLEAN or 
+            column_name_lower in ['is_active', 'active', 'enabled', 'is_enabled', 'is_deleted', 'deleted', 'is_valid']):
+            strategy['method'] = 'boolean'
+            return strategy
+        
+        # Handle datetime/timestamp columns
+        if (column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP, ColumnType.DATE] or
+            any(keyword in column_name_lower for keyword in ['created', 'modified', 'updated', 'date', 'time', '_on', '_at'])):
+            strategy['method'] = 'datetime'
+            strategy['format'] = 'datetime' if 'date' in column_name_lower else 'timestamp'
+            return strategy
+        
+        # Handle numeric columns
         if column.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
             strategy['method'] = 'numpy_int'
-            strategy['min_val'] = column.min_value or 1
-            strategy['max_val'] = column.max_value or 1000000
+            
+            # Set reasonable ranges based on column type and name
+            if column.data_type == ColumnType.SMALLINT:
+                strategy['min_val'] = column.min_value or 1
+                strategy['max_val'] = column.max_value or 32767
+            elif 'id' in column_name_lower and column_name_lower.endswith('_id'):
+                # Foreign key IDs should be smaller ranges
+                strategy['min_val'] = 1
+                strategy['max_val'] = 1000  
+            else:
+                strategy['min_val'] = column.min_value or 1
+                strategy['max_val'] = column.max_value or 100000  # More reasonable than 1M
         
         elif column.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
             strategy['method'] = 'numpy_float'
             strategy['min_val'] = column.min_value or 0.0
-            strategy['max_val'] = column.max_value or 1000000.0
+            strategy['max_val'] = column.max_value or 10000.0  # More reasonable range
         
-        elif column.data_type == ColumnType.BOOLEAN:
-            strategy['method'] = 'numpy_bool'
-        
-        elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT]:
-            if 'email' in column.name.lower():
+        # Handle string columns with smart type detection
+        elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
+            if 'email' in column_name_lower:
                 strategy['method'] = 'string_email'
-            elif 'name' in column.name.lower():
+            elif any(name_part in column_name_lower for name_part in ['name', 'title', 'label']):
                 strategy['method'] = 'string_name'
-            elif 'phone' in column.name.lower():
+            elif any(phone_part in column_name_lower for phone_part in ['phone', 'mobile', 'number']):
                 strategy['method'] = 'string_phone'
+            elif column_name_lower in ['description', 'comment', 'notes', 'content']:
+                strategy['method'] = 'string_text'
+            elif column_name_lower.endswith('_id') and column.data_type in [ColumnType.VARCHAR, ColumnType.CHAR]:
+                strategy['method'] = 'string_id'  # For string-based IDs
             else:
                 strategy['method'] = 'string_default'
+            
             strategy['max_length'] = column.max_length or 50
         
         else:
             strategy['method'] = 'fallback'
+        
+        # Add null avoidance flag - never generate nulls for NOT NULL columns
+        strategy['avoid_null'] = not strategy.get('nullable', True)
         
         return strategy
     
@@ -336,35 +369,70 @@ class UltraFastDataGenerator:
     
     def _generate_column_batch(self, strategy: Dict[str, Any], 
                               batch_size: int, offset: int) -> Union[np.ndarray, List[Any]]:
-        """Generate batch of values for a column."""
+        """Generate batch of values for a column with proper constraint handling."""
         method = strategy['method']
         
-        if method == 'numpy_int':
+        # Handle boolean columns properly (return 0/1 instead of large integers)
+        if method == 'boolean':
+            return np.random.randint(0, 2, size=batch_size)  # More compatible way to generate 0/1
+        
+        # Handle datetime/timestamp columns
+        elif method == 'datetime':
+            from datetime import datetime, timedelta
+            import random
+            base_date = datetime.now() - timedelta(days=365)  # Start from 1 year ago
+            return [(base_date + timedelta(days=random.randint(0, 365), 
+                                         hours=random.randint(0, 23),
+                                         minutes=random.randint(0, 59))).strftime('%Y-%m-%d %H:%M:%S')
+                   for i in range(batch_size)]
+        
+        # Handle integer columns
+        elif method == 'numpy_int':
             min_val = strategy.get('min_val', 1)
             max_val = strategy.get('max_val', 1000000)
             
             # Ensure min_val < max_val to avoid "low >= high" error
             if min_val >= max_val:
-                max_val = min_val + 1000000
+                max_val = min_val + 1000
             
             return np.random.randint(min_val, max_val, size=batch_size, dtype=np.int64)
         
+        # Handle float columns
         elif method == 'numpy_float':
             min_val = strategy.get('min_val', 0.0)
             max_val = strategy.get('max_val', 1000000.0)
+            
+            # Ensure min_val < max_val
+            if min_val >= max_val:
+                max_val = min_val + 1000.0
+                
             return np.random.uniform(min_val, max_val, size=batch_size)
         
         elif method == 'numpy_bool':
-            return np.random.choice([True, False], size=batch_size)
+            return np.random.randint(0, 2, size=batch_size)  # Use 0/1 instead of True/False
         
+        # Handle string columns with improved generation
         elif method.startswith('string_'):
             pattern = method.replace('string_', '')
             max_length = strategy.get('max_length', 50)
-            return self.string_generator.generate_batch(batch_size, pattern, max_length)
+            
+            # Generate specific types instead of using generic string generator
+            if pattern == 'email':
+                domains = ['test.org', 'example.com', 'demo.net', 'fake.io', 'mock.dev']
+                return [f"user{offset + i}@{np.random.choice(domains)}" 
+                       for i in range(batch_size)]
+            elif pattern == 'id':
+                return [f"ID{offset + i:06d}" for i in range(batch_size)]
+            elif pattern == 'text':
+                texts = ['Sample description', 'Lorem ipsum text', 'Generated content']
+                return [f"{np.random.choice(texts)} {offset + i}" for i in range(batch_size)]
+            else:
+                # Use the existing string generator for other patterns
+                return self.string_generator.generate_batch(batch_size, pattern, max_length)
         
         else:
-            # Fallback to simple generation
-            return [f"value_{offset + i}" for i in range(batch_size)]
+            # Improved fallback generation
+            return [f"data_{offset + i}" for i in range(batch_size)]
 
 
 class UltraFastInserter:

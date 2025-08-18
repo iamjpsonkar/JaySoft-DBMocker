@@ -43,24 +43,34 @@ class DataGenerator:
         
         # Stop flag for halting generation mid-process
         self.stop_flag = None
-    
-    def set_stop_flag(self, stop_flag):
-        """Set the stop flag for halting generation."""
-        self.stop_flag = stop_flag
         
-        # Constraint handling caches
+        # Initialize constraint handling and pattern generation
+        self._init_constraint_handling()
+        self._init_pattern_generation()
+    
+    def _init_constraint_handling(self):
+        """Initialize constraint handling caches."""
         self._unique_value_sets: Dict[str, Set[Any]] = {}  # For UNIQUE constraints
         self._composite_unique_sets: Dict[str, Set[tuple]] = {}  # For composite UNIQUE constraints
         self._check_constraint_cache: Dict[str, Any] = {}  # For CHECK constraints
         
         # Custom generators
         self._custom_generators: Dict[str, Callable] = self._build_custom_generators()
-        
-        # Pattern-based generators
+    
+    def _init_pattern_generation(self):
+        """Initialize pattern-based generation."""
         self._pattern_generator = None
-        if hasattr(schema, 'table_patterns') and schema.table_patterns:
+        if hasattr(self.schema, 'table_patterns') and self.schema.table_patterns:
             from .pattern_analyzer import PatternBasedGenerator
-            self._pattern_generator = PatternBasedGenerator(schema.table_patterns)
+            self._pattern_generator = PatternBasedGenerator(self.schema.table_patterns)
+    
+    def _build_custom_generators(self) -> Dict[str, Callable]:
+        """Build custom generator functions."""
+        return {}
+    
+    def set_stop_flag(self, stop_flag):
+        """Set the stop flag for halting generation."""
+        self.stop_flag = stop_flag
     
     def generate_data_for_table(self, table_name: str, num_rows: int) -> List[Dict[str, Any]]:
         """Generate data for a specific table."""
@@ -319,12 +329,25 @@ class DataGenerator:
     def _generate_integer(self, column: ColumnInfo, 
                          config: Optional[ColumnGenerationConfig], 
                          table: Optional[TableInfo] = None) -> int:
-        """Generate integer value."""
+        """Generate integer value with smart constraint detection."""
         if config and config.possible_values:
             return random.choice(config.possible_values)
         
+        # Smart detection for boolean-like columns even if they're defined as INTEGER
+        column_name_lower = column.name.lower()
+        if any(pattern in column_name_lower for pattern in [
+            'is_', 'has_', 'can_', 'should_', 'active', 'enabled', 'visible', 
+            'deleted', 'archived', 'published', 'verified', 'confirmed'
+        ]) and not config:
+            # Boolean-like column without explicit config - use 0/1
+            return random.choice([0, 1])
+        
         min_val = int(config.min_value) if config and config.min_value else column.min_value or 1
         max_val = int(config.max_value) if config and config.max_value else column.max_value or 2147483647
+        
+        # For foreign key columns, use smaller ranges
+        if column_name_lower.endswith('_id') and not config:
+            max_val = min(1000, max_val)  # Reasonable FK range
         
         # Ensure min_val < max_val to avoid "low >= high" error
         if min_val >= max_val:
@@ -1162,6 +1185,12 @@ class DataGenerator:
         ]):
             return True
         
+        # Datetime/timestamp columns (add datetime detection)
+        if any(pattern in column_name for pattern in [
+            'created', 'modified', 'updated', 'deleted', 'date', 'time', '_at', '_on'
+        ]):
+            return True
+        
         # Email columns
         if any(pattern in column_name for pattern in ['email', 'mail']):
             return True
@@ -1190,6 +1219,21 @@ class DataGenerator:
             'deleted', 'archived', 'published', 'verified', 'confirmed'
         ]):
             return random.choice([0, 1])
+        
+        # Datetime/timestamp columns
+        if any(pattern in column_name for pattern in [
+            'created', 'modified', 'updated', 'deleted', 'date', 'time', '_at', '_on'
+        ]):
+            # Generate appropriate datetime format based on column data type
+            if column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP]:
+                return self.faker.date_time_between(start_date='-30y', end_date='now')
+            elif column.data_type == ColumnType.DATE:
+                return self.faker.date_between(start_date='-30y', end_date='today')
+            elif column.data_type == ColumnType.TIME:
+                return self.faker.time()
+            else:
+                # For VARCHAR/TEXT columns with datetime names, generate datetime string
+                return self.faker.date_time_between(start_date='-30y', end_date='now').strftime('%Y-%m-%d %H:%M:%S')
         
         # Email columns
         if any(pattern in column_name for pattern in ['email', 'mail']):

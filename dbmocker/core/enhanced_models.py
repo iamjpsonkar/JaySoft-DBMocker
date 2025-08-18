@@ -342,8 +342,8 @@ class BulkGenerationRequest(BaseModel):
 
 
 def create_high_performance_config(
-    target_tables: Dict[str, int],
     performance_mode: PerformanceMode = PerformanceMode.HIGH_SPEED,
+    target_tables: Optional[Dict[str, int]] = None,
     enable_duplicates: bool = True,
     duplicate_strategy: DuplicateStrategy = DuplicateStrategy.SMART_DUPLICATES,
     batch_size: Optional[int] = None,
@@ -410,7 +410,7 @@ def create_high_performance_config(
     
     # Create enhanced config
     config = EnhancedGenerationConfig(
-        target_rows_per_table=target_tables,
+        target_rows_per_table=target_tables or {},
         performance=perf_settings,
         duplicates=dup_config,
         generation_mode="ultra_high_performance" if performance_mode == PerformanceMode.ULTRA_HIGH else "bulk",

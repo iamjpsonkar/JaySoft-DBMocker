@@ -634,12 +634,14 @@ class HighPerformanceGenerator:
         
         logger.info(f"🧵 {task.worker_id} (TID: {thread_id}): Starting {rows_to_generate:,} rows")
         
-        # Create thread-local generator
+        # Create thread-local generator using enhanced generator for better constraint handling
         thread_config = GenerationConfig(**self.config.dict())
         if task.seed:
             thread_config.seed = task.seed
         
-        generator = DataGenerator(self.schema, thread_config, None)
+        # Use enhanced generator with better column name detection and constraint handling
+        from .parallel_generator import EnhancedDataGenerator
+        generator = EnhancedDataGenerator(self.schema, thread_config, None)
         
         # Generate data in batches
         total_inserted = 0

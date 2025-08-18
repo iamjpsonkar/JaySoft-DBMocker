@@ -1509,10 +1509,10 @@ class EnhancedDBMockerGUI:
                 # Standard generation - use appropriate processor based on config
                 total_rows = sum(table_configs.values())
                 
-                # Auto-upgrade to ultra-fast if fast data reuse is enabled or large dataset
+                # Auto-upgrade to ultra-fast if fast data reuse is enabled or moderate dataset
                 if (config.duplicates.enable_fast_data_reuse or 
                     config.duplicates.global_duplicate_strategy == DuplicateStrategy.FAST_DATA_REUSE or
-                    total_rows >= 100000):
+                    total_rows >= 10000):  # Lower threshold for better performance
                     
                     self.log_message("🚀 Auto-upgrading to ultra-fast processing...")
                     processor = create_ultra_fast_processor(self.schema, config, self.db_connection)
