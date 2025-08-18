@@ -41,6 +41,13 @@ class DataGenerator:
         self._existing_values: Dict[str, Dict[str, Set[Any]]] = {}
         self._primary_key_counters: Dict[str, int] = {}
         
+        # Stop flag for halting generation mid-process
+        self.stop_flag = None
+    
+    def set_stop_flag(self, stop_flag):
+        """Set the stop flag for halting generation."""
+        self.stop_flag = stop_flag
+        
         # Constraint handling caches
         self._unique_value_sets: Dict[str, Set[Any]] = {}  # For UNIQUE constraints
         self._composite_unique_sets: Dict[str, Set[tuple]] = {}  # For composite UNIQUE constraints
@@ -72,6 +79,11 @@ class DataGenerator:
             self._generated_values[table_name] = {}
         
         for i in range(num_rows):
+            # Check stop flag every 100 rows for responsiveness
+            if self.stop_flag and i % 100 == 0 and self.stop_flag.is_set():
+                logger.info(f"🛑 Generation stopped at row {i + 1}/{num_rows} for table {table_name}")
+                break
+                
             try:
                 row = self._generate_row(table, table_config)
                 generated_rows.append(row)

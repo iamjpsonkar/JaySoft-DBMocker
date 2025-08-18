@@ -41,6 +41,7 @@ class ParallelDataGenerator:
         self.schema = schema
         self.config = config
         self.db_connection = db_connection
+        self.stop_flag = None  # For stopping generation mid-process
         
         # Performance tracking
         self.generation_stats = GenerationStats()
@@ -52,6 +53,10 @@ class ParallelDataGenerator:
         self._memory_threshold = 0.8  # 80% memory usage threshold
         
         logger.info(f"Parallel generator initialized: {self._adaptive_config}")
+    
+    def set_stop_flag(self, stop_flag):
+        """Set the stop flag for halting generation."""
+        self.stop_flag = stop_flag
     
     def _calculate_adaptive_config(self) -> Dict[str, Any]:
         """Calculate optimal configuration based on system resources."""
@@ -261,12 +266,22 @@ class ParallelDataGenerator:
                     self.schema, 
                     self.config, 
                     self.db_connection, 
-                    task
+                    task,
+                    self.stop_flag  # Pass stop flag to worker
                 ): task for task in tasks
             }
             
             # Collect results with progress tracking
             for future in as_completed(future_to_task):
+                # Check stop flag before processing results
+                if self.stop_flag and self.stop_flag.is_set():
+                    logger.info(f"🛑 Stopping parallel generation - cancelling remaining workers")
+                    # Cancel remaining futures
+                    for remaining_future in future_to_task:
+                        if not remaining_future.done():
+                            remaining_future.cancel()
+                    break
+                    
                 task = future_to_task[future]
                 try:
                     result = future.result(timeout=120)  # 2 minute timeout per thread
@@ -433,7 +448,8 @@ def _generate_data_worker_process(schema: DatabaseSchema, config: GenerationConf
 
 
 def _generate_data_worker_thread(schema: DatabaseSchema, config: GenerationConfig,
-                                db_connection: DatabaseConnection, task: GenerationTask) -> List[Dict[str, Any]]:
+                                db_connection: DatabaseConnection, task: GenerationTask, 
+                                stop_flag=None) -> List[Dict[str, Any]]:
     """Worker function for multithreading data generation."""
     import threading
     import time
@@ -452,6 +468,10 @@ def _generate_data_worker_thread(schema: DatabaseSchema, config: GenerationConfi
         logger.debug(f"🎲 Worker {task.task_id}: Using seed {task.seed} for reproducible generation")
     
     generator = EnhancedDataGenerator(schema, task_config, db_connection)
+    
+    # Pass stop flag to generator if provided
+    if stop_flag:
+        generator.set_stop_flag(stop_flag)
     
     # Generate data for the specified range
     result = generator.generate_data_for_table(task.table_name, num_rows)
