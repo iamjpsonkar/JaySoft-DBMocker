@@ -313,10 +313,20 @@ The enhanced GUI features a modern tabbed interface with 5 specialized tabs:
 
 #### Tab 1: Database Connection
 
--   **Driver Selection**: Choose between PostgreSQL, MySQL, SQLite
--   **Connection Settings**: Host, port, database, credentials
--   **Test Connection**: Verify database connectivity
--   **Recent Connections**: Quick access to previous connections
+**🔗 Improved Connection Flow:**
+
+1. **Select Database Type**: Choose between PostgreSQL, MySQL, SQLite
+2. **Server Connection**: 
+   - For **PostgreSQL/MySQL**: Enter host, port, username, password → Click "Connect to Server"
+   - For **SQLite**: Select database file → Click "Connect to File"
+3. **Database Selection**: After server connection, select specific database from dropdown
+4. **Schema Analysis**: Click "Analyze Database" to load table structure
+
+**✨ Features:**
+-   **Test Connection**: Verify connectivity before analysis
+-   **Auto-populated Database List**: Server connection fetches available databases
+-   **SQLite File Browser**: Easy file selection for SQLite databases
+-   **Smart Flow**: Buttons enable/disable based on connection state
 
 #### Tab 2: Performance Configuration
 
@@ -358,10 +368,15 @@ The enhanced GUI features a modern tabbed interface with 5 specialized tabs:
 
 #### Tab 4: Table Configuration
 
--   **Table Selection**: Choose which tables to populate
--   **Row Count Settings**: Set target rows per table
--   **Bulk Operations**: Set same row count for multiple tables
--   **Constraint Analysis**: View table constraints and relationships
+**📊 Enhanced Table Management:**
+
+-   **Grid Layout**: Tables displayed in 2-column grid for better space utilization
+-   **Scrollable Interface**: Vertical and horizontal scrollbars handle 100+ tables
+-   **Table Information**: Each table shows column count and foreign key count
+-   **Row Count Settings**: Set target rows per table (up to 100M)
+-   **Quick Presets**: Bulk apply common row counts (1K, 10K, 100K, 1M)
+-   **Smart Tooltips**: Hover for table details and column information
+-   **Mouse Wheel Support**: Easy navigation through large table lists
 
 #### Tab 5: Generation & Monitoring
 
