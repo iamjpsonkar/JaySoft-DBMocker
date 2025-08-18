@@ -995,8 +995,8 @@ class EnhancedDBMockerGUI:
         self.generation_mode = tk.StringVar(value="standard")
         modes = [
             ("Standard Generation", "standard", "Regular generation with basic optimizations"),
-            ("High-Performance", "high_performance", "Optimized generation for large datasets"),
-            ("Ultra-Fast Processing", "ultra_fast", "Maximum performance for millions of records")
+            ("Bulk Generation", "bulk", "Optimized bulk generation for large datasets"),
+            ("Ultra-Fast Processing", "ultra_high_performance", "Maximum performance for millions of records")
         ]
         
         for text, value, tooltip in modes:
@@ -1448,7 +1448,7 @@ class EnhancedDBMockerGUI:
             # Choose generator based on mode
             generation_mode = self.generation_mode.get()
             
-            if generation_mode == "ultra_fast":
+            if generation_mode == "ultra_high_performance":
                 # Ultra-fast processor
                 self.log_message("🚀 Starting ultra-fast processing...")
                 processor = create_ultra_fast_processor(self.schema, config, self.db_connection)
@@ -1474,7 +1474,7 @@ class EnhancedDBMockerGUI:
                     total_generated += report.total_rows_generated
                     self.log_message(f"✅ {table_name}: {report.total_rows_generated:,} rows generated")
             
-            elif generation_mode == "high_performance":
+            elif generation_mode == "bulk":
                 # High-performance generator
                 self.log_message("📈 Starting high-performance generation...")
                 generator = HighPerformanceGenerator(self.schema, config, self.db_connection)
@@ -1607,14 +1607,14 @@ class EnhancedDBMockerGUI:
         if strategy == "fast_data_reuse":
             # Suggest ultra-fast mode for best performance
             current_mode = self.generation_mode.get()
-            if current_mode != "ultra_fast":
+            if current_mode != "ultra_high_performance":
                 result = messagebox.askyesno(
                     "Optimization Suggestion",
                     "Fast Data Reuse works best with Ultra-Fast Processing mode.\n\n"
                     "Would you like to switch to Ultra-Fast Processing for optimal performance?"
                 )
                 if result:
-                    self.generation_mode.set("ultra_fast")
+                    self.generation_mode.set("ultra_high_performance")
                     self.log_message("🚀 Switched to Ultra-Fast Processing mode for optimal fast data reuse")
     
     def update_progress(self, current_rows: int, current_table: str, rate: float):
