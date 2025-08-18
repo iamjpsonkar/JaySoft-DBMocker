@@ -475,10 +475,12 @@ class TableConfigPanel:
         preset_frame.pack(fill=tk.X, pady=(10, 0))
         
         preset_buttons = [
+            ("None (0)", 0),
             ("Small (1K)", 1000),
             ("Medium (10K)", 10000),
             ("Large (100K)", 100000),
-            ("Very Large (1M)", 1000000)
+            ("Very Large (1M)", 1000000),
+            ("Huge (10M)", 10000000)
         ]
         
         button_frame = ttk.Frame(preset_frame)
@@ -549,14 +551,17 @@ class TableConfigPanel:
             
             ttk.Label(count_frame, text="Rows:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
             
-            row_count_var = tk.IntVar(value=10000)  # Default 10K rows
-            spinbox = ttk.Spinbox(count_frame, from_=0, to=100000000, width=15,
-                                 textvariable=row_count_var, format="%d")
-            spinbox.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
+            row_count_var = tk.IntVar(value=0)  # Default 0 rows
+            
+            # Create combobox for quick selection
+            count_values = ["0", "1000", "10000", "100000", "1000000", "10000000", "100000000"]
+            count_combo = ttk.Combobox(count_frame, textvariable=row_count_var, 
+                                      values=count_values, width=15)
+            count_combo.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
             
             self.table_configs[table.name] = row_count_var
             
-            ModernToolTip(spinbox, f"Number of rows to generate for {table.name}\nColumns: {', '.join([col.name for col in table.columns[:3]])}{'...' if len(table.columns) > 3 else ''}")
+            ModernToolTip(count_combo, f"Number of rows to generate for {table.name}\nSelect from dropdown or type custom value\nColumns: {', '.join([col.name for col in table.columns[:3]])}{'...' if len(table.columns) > 3 else ''}")
         
         # Update scroll region after adding all tables
         self.scrollable_frame.update_idletasks()

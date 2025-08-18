@@ -326,6 +326,10 @@ class DataGenerator:
         min_val = int(config.min_value) if config and config.min_value else column.min_value or 1
         max_val = int(config.max_value) if config and config.max_value else column.max_value or 2147483647
         
+        # Ensure min_val < max_val to avoid "low >= high" error
+        if min_val >= max_val:
+            max_val = min_val + 1000000  # Give a reasonable range
+        
         return random.randint(int(min_val), int(max_val))
     
     def _generate_unique_primary_key(self, table_name: str, column_name: str) -> int:
@@ -351,6 +355,10 @@ class DataGenerator:
         min_val = int(config.min_value) if config and config.min_value else column.min_value or 1
         max_val = int(config.max_value) if config and config.max_value else column.max_value or 9223372036854775807
         
+        # Ensure min_val < max_val to avoid "low >= high" error
+        if min_val >= max_val:
+            max_val = min_val + 1000000  # Give a reasonable range
+        
         return random.randint(int(min_val), int(max_val))
     
     def _generate_smallint(self, column: ColumnInfo, 
@@ -362,6 +370,10 @@ class DataGenerator:
         
         min_val = int(config.min_value) if config and config.min_value else column.min_value or 1
         max_val = int(config.max_value) if config and config.max_value else column.max_value or 32767
+        
+        # Ensure min_val < max_val to avoid "low >= high" error
+        if min_val >= max_val:
+            max_val = min_val + 1000  # Give a reasonable range for smallint
         
         return random.randint(int(min_val), int(max_val))
     
@@ -376,8 +388,11 @@ class DataGenerator:
         
         # Generate random decimal within precision/scale constraints
         max_digits = precision - scale
-        integer_part = random.randint(0, 10**max_digits - 1)
-        decimal_part = random.randint(0, 10**scale - 1)
+        max_integer = max(0, 10**max_digits - 1)
+        max_decimal = max(0, 10**scale - 1)
+        
+        integer_part = random.randint(0, max_integer) if max_integer > 0 else 0
+        decimal_part = random.randint(0, max_decimal) if max_decimal > 0 else 0
         
         return Decimal(f"{integer_part}.{decimal_part:0{scale}d}")
     
@@ -417,7 +432,11 @@ class DataGenerator:
         if column.avg_length:
             target_length = min(int(column.avg_length), max_length)
         else:
-            target_length = random.randint(min_length, max_length)
+            # Ensure min_length < max_length to avoid "low >= high" error
+            if min_length >= max_length:
+                target_length = min_length
+            else:
+                target_length = random.randint(min_length, max_length)
         
         # Generate realistic text, handling short fields
         if target_length < 5:
