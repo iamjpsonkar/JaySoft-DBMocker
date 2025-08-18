@@ -431,28 +431,44 @@ class TableConfigPanel:
         self.create_table_config_ui()
     
     def create_table_config_ui(self):
-        """Create table configuration UI."""
+        """Create table configuration UI with improved scrolling."""
         # Instructions
         instruction_label = ttk.Label(self.frame, 
                                      text="Configure row counts for each table:",
                                      font=("Segoe UI", 10, "bold"))
         instruction_label.pack(anchor=tk.W, pady=(0, 10))
         
-        # Scrollable frame for table configurations
-        canvas = tk.Canvas(self.frame, height=200)
-        scrollbar = ttk.Scrollbar(self.frame, orient="vertical", command=canvas.yview)
-        self.scrollable_frame = ttk.Frame(canvas)
+        # Container for scrollable area
+        scroll_container = ttk.Frame(self.frame)
+        scroll_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
+        # Scrollable frame with both vertical and horizontal scrollbars
+        self.canvas = tk.Canvas(scroll_container, height=300, highlightthickness=0)
         
-        canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # Vertical scrollbar
+        v_scrollbar = ttk.Scrollbar(scroll_container, orient="vertical", command=self.canvas.yview)
+        v_scrollbar.pack(side="right", fill="y")
         
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Horizontal scrollbar
+        h_scrollbar = ttk.Scrollbar(scroll_container, orient="horizontal", command=self.canvas.xview)
+        h_scrollbar.pack(side="bottom", fill="x")
+        
+        # Configure canvas scrolling
+        self.canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        
+        # Scrollable frame inside canvas
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # Bind events for proper scrolling
+        self.scrollable_frame.bind("<Configure>", self.on_frame_configure)
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
+        
+        # Enable mouse wheel scrolling
+        self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+        self.canvas.bind("<Button-4>", self.on_mousewheel)
+        self.canvas.bind("<Button-5>", self.on_mousewheel)
         
         # Quick presets
         preset_frame = ttk.LabelFrame(self.frame, text="Quick Presets", padding=5)
@@ -474,6 +490,28 @@ class TableConfigPanel:
             btn.pack(side=tk.LEFT, padx=(0, 5))
             ModernToolTip(btn, f"Set all tables to {count:,} rows")
     
+    def on_frame_configure(self, event):
+        """Handle frame configure event for scrolling."""
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+    
+    def on_canvas_configure(self, event):
+        """Handle canvas configure event for proper sizing."""
+        # Update the scrollable frame width to match canvas width if needed
+        canvas_width = event.width
+        self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+    
+    def on_mousewheel(self, event):
+        """Handle mouse wheel scrolling."""
+        if event.delta:
+            # Windows and MacOS
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        elif event.num == 4:
+            # Linux scroll up
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            # Linux scroll down
+            self.canvas.yview_scroll(1, "units")
+    
     def update_tables(self, schema):
         """Update table list from schema."""
         # Clear existing configs
@@ -485,38 +523,44 @@ class TableConfigPanel:
         if not schema:
             return
         
-        # Create configuration for each table
+        # Create a grid layout for better handling of many tables
+        tables_per_row = 2  # Show 2 tables per row for better space utilization
+        current_row_frame = None
+        
         for i, table in enumerate(schema.tables):
-            table_frame = ttk.Frame(self.scrollable_frame)
-            table_frame.pack(fill=tk.X, pady=2)
+            # Create new row frame every 2 tables
+            if i % tables_per_row == 0:
+                current_row_frame = ttk.Frame(self.scrollable_frame)
+                current_row_frame.pack(fill=tk.X, pady=2)
             
-            # Table name and info
-            info_frame = ttk.Frame(table_frame)
-            info_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            # Table configuration frame
+            table_frame = ttk.LabelFrame(current_row_frame, text=f"📊 {table.name}", padding=5)
+            table_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5) if i % tables_per_row == 0 else (5, 0))
             
-            name_label = ttk.Label(info_frame, text=table.name, 
-                                  font=("Segoe UI", 10, "bold"))
-            name_label.pack(anchor=tk.W)
+            # Table info
+            info_label = ttk.Label(table_frame, 
+                                  text=f"{len(table.columns)} columns • {len(table.foreign_keys)} FKs",
+                                  font=("Segoe UI", 8), foreground="gray")
+            info_label.pack(anchor=tk.W, pady=(0, 5))
             
-            info_label = ttk.Label(info_frame, 
-                                  text=f"{len(table.columns)} columns, {len(table.foreign_keys)} FKs",
-                                  font=("Segoe UI", 8))
-            info_label.pack(anchor=tk.W)
-            
-            # Row count input
+            # Row count input with better layout
             count_frame = ttk.Frame(table_frame)
-            count_frame.pack(side=tk.RIGHT, padx=(10, 0))
+            count_frame.pack(fill=tk.X)
             
-            ttk.Label(count_frame, text="Rows:").pack(side=tk.LEFT)
+            ttk.Label(count_frame, text="Rows:", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
             
             row_count_var = tk.IntVar(value=10000)  # Default 10K rows
-            spinbox = ttk.Spinbox(count_frame, from_=0, to=10000000, width=12,
+            spinbox = ttk.Spinbox(count_frame, from_=0, to=100000000, width=15,
                                  textvariable=row_count_var, format="%d")
-            spinbox.pack(side=tk.LEFT, padx=(5, 0))
+            spinbox.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
             
             self.table_configs[table.name] = row_count_var
             
-            ModernToolTip(spinbox, f"Number of rows to generate for {table.name}")
+            ModernToolTip(spinbox, f"Number of rows to generate for {table.name}\nColumns: {', '.join([col.name for col in table.columns[:3]])}{'...' if len(table.columns) > 3 else ''}")
+        
+        # Update scroll region after adding all tables
+        self.scrollable_frame.update_idletasks()
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
     
     def apply_preset(self, count):
         """Apply preset row count to all tables."""
@@ -786,12 +830,11 @@ class EnhancedDBMockerGUI:
         driver_combo.pack(side=tk.LEFT, padx=(10, 0))
         driver_combo.bind("<<ComboboxSelected>>", self.on_driver_change)
         
-        # Connection fields
+        # Connection fields (server-level)
         self.connection_fields = {}
         fields = [
             ("Host:", "host", "localhost"),
             ("Port:", "port", "5432"),
-            ("Database:", "database", "test.db"),
             ("Username:", "username", "postgres"),
             ("Password:", "password", "")
         ]
@@ -812,19 +855,53 @@ class EnhancedDBMockerGUI:
             
             self.connection_fields[key] = entry
         
+        # Database selection (shown after server connection)
+        self.db_select_frame = ttk.Frame(form_frame)
+        self.db_select_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(self.db_select_frame, text="Database:", width=15).pack(side=tk.LEFT)
+        self.database_var = tk.StringVar()
+        self.database_combo = ttk.Combobox(self.db_select_frame, textvariable=self.database_var,
+                                          state="readonly", width=30)
+        self.database_combo.pack(side=tk.LEFT, padx=(10, 0))
+        self.database_combo.bind("<<ComboboxSelected>>", self.on_database_selected)
+        
+        # Initially hide database selection
+        self.db_select_frame.pack_forget()
+        
+        # SQLite file selection (shown for SQLite driver)
+        self.sqlite_frame = ttk.Frame(form_frame)
+        sqlite_file_frame = ttk.Frame(self.sqlite_frame)
+        sqlite_file_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(sqlite_file_frame, text="Database File:", width=15).pack(side=tk.LEFT)
+        self.sqlite_file_var = tk.StringVar(value="database.db")
+        sqlite_entry = ttk.Entry(sqlite_file_frame, textvariable=self.sqlite_file_var, width=25)
+        sqlite_entry.pack(side=tk.LEFT, padx=(10, 5))
+        
+        browse_button = ttk.Button(sqlite_file_frame, text="Browse...", 
+                                  command=self.browse_sqlite_file)
+        browse_button.pack(side=tk.LEFT)
+        
         # Connection buttons
         button_frame = ttk.Frame(form_frame)
         button_frame.pack(fill=tk.X, pady=(20, 0))
         
-        self.connect_button = ttk.Button(button_frame, text="🔗 Connect to Database",
-                                        command=self.connect_to_database,
-                                        style="Modern.TButton")
-        self.connect_button.pack(side=tk.LEFT)
-        
         self.test_button = ttk.Button(button_frame, text="🧪 Test Connection",
                                      command=self.test_connection,
                                      style="Modern.TButton")
-        self.test_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.test_button.pack(side=tk.LEFT)
+        
+        self.connect_server_button = ttk.Button(button_frame, text="🔗 Connect to Server",
+                                               command=self.connect_to_server,
+                                               style="Modern.TButton")
+        self.connect_server_button.pack(side=tk.LEFT, padx=(10, 0))
+        
+        self.analyze_button = ttk.Button(button_frame, text="📊 Analyze Database",
+                                        command=self.connect_to_database,
+                                        style="Modern.TButton",
+                                        state=tk.DISABLED)
+        self.analyze_button.pack(side=tk.LEFT, padx=(10, 0))
         
         # Connection status
         self.connection_status = ttk.Label(form_frame, text="Not connected",
@@ -1075,8 +1152,7 @@ class EnhancedDBMockerGUI:
             self.connection_fields["username"].insert(0, "")
             self.connection_fields["password"].delete(0, tk.END)
             self.connection_fields["password"].insert(0, "")
-            self.connection_fields["database"].delete(0, tk.END)
-            self.connection_fields["database"].insert(0, "test.db")
+
             
             # Disable fields not needed for SQLite
             self.connection_fields["host"].configure(state="disabled")
@@ -1095,8 +1171,7 @@ class EnhancedDBMockerGUI:
             self.connection_fields["port"].insert(0, "5432")
             self.connection_fields["username"].delete(0, tk.END)
             self.connection_fields["username"].insert(0, "postgres")
-            self.connection_fields["database"].delete(0, tk.END)
-            self.connection_fields["database"].insert(0, "testdb")
+
         
         elif driver == "mysql":
             # Enable all fields
@@ -1109,8 +1184,7 @@ class EnhancedDBMockerGUI:
             self.connection_fields["port"].insert(0, "3306")
             self.connection_fields["username"].delete(0, tk.END)
             self.connection_fields["username"].insert(0, "root")
-            self.connection_fields["database"].delete(0, tk.END)
-            self.connection_fields["database"].insert(0, "testdb")
+
     
     def quick_sqlite(self):
         """Quick SQLite setup."""
@@ -1135,6 +1209,84 @@ class EnhancedDBMockerGUI:
         """Quick MySQL setup."""
         self.db_driver.set("mysql")
         self.on_driver_change()
+    
+    def browse_sqlite_file(self):
+        """Browse for SQLite database file."""
+        filename = filedialog.askopenfilename(
+            title="Select SQLite Database File",
+            filetypes=[("SQLite files", "*.db *.sqlite *.sqlite3"), ("All files", "*.*")]
+        )
+        if filename:
+            self.sqlite_file_var.set(filename)
+    
+    def connect_to_server(self):
+        """Connect to database server and list available databases."""
+        driver = self.db_driver.get()
+        
+        if driver == "sqlite":
+            # For SQLite, go directly to database analysis
+            self.connect_to_database()
+            return
+        
+        try:
+            # Create server-level connection (no specific database)
+            config = DatabaseConfig(
+                driver=driver,
+                host=self.connection_fields["host"].get(),
+                port=int(self.connection_fields["port"].get()),
+                database="",  # No specific database for server connection
+                username=self.connection_fields["username"].get(),
+                password=self.connection_fields["password"].get()
+            )
+            
+            self.status_var.set("Connecting to server...")
+            server_conn = DatabaseConnection(config)
+            server_conn.connect()
+            
+            # Get list of databases
+            self.status_var.set("Fetching database list...")
+            databases = self.get_database_list(server_conn, driver)
+            server_conn.close()
+            
+            if databases:
+                # Show database selection
+                self.database_combo['values'] = databases
+                self.database_combo.set("")
+                self.db_select_frame.pack(fill=tk.X, pady=5, after=self.connection_fields["password"].master)
+                
+                self.connection_status.configure(text="✅ Connected to server", foreground="green")
+                self.status_var.set(f"Server connected • {len(databases)} databases found")
+                self.analyze_button.configure(state="normal")
+                
+                messagebox.showinfo("Success", f"Connected to server!\nFound {len(databases)} databases.\nSelect a database to analyze.")
+            else:
+                raise Exception("No databases found on server")
+                
+        except Exception as e:
+            self.connection_status.configure(text="❌ Server connection failed", foreground="red")
+            self.status_var.set("Connection failed")
+            messagebox.showerror("Connection Error", f"Failed to connect to server: {str(e)}")
+    
+    def get_database_list(self, connection, driver):
+        """Get list of databases from server."""
+        try:
+            if driver == "postgresql":
+                query = "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+            elif driver == "mysql":
+                query = "SHOW DATABASES"
+            else:
+                return []
+            
+            result = connection.execute_query(query)
+            return [row[0] for row in result if row[0] not in ['information_schema', 'performance_schema', 'mysql', 'sys']]
+        except Exception as e:
+            logger.error(f"Failed to get database list: {e}")
+            return []
+    
+    def on_database_selected(self, event=None):
+        """Handle database selection."""
+        if self.database_var.get():
+            self.analyze_button.configure(state="normal")
     
     def test_connection(self):
         """Test database connection."""
@@ -1202,16 +1354,17 @@ class EnhancedDBMockerGUI:
             return DatabaseConfig(
                 host="",
                 port=0,
-                database=self.connection_fields["database"].get(),
+                database=self.sqlite_file_var.get(),
                 username="",
                 password="",
                 driver=driver
             )
         else:
+            database = self.database_var.get() if hasattr(self, 'database_var') else ""
             return DatabaseConfig(
                 host=self.connection_fields["host"].get(),
                 port=int(self.connection_fields["port"].get() or "0"),
-                database=self.connection_fields["database"].get(),
+                database=database,
                 username=self.connection_fields["username"].get(),
                 password=self.connection_fields["password"].get(),
                 driver=driver

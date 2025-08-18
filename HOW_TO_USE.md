@@ -263,7 +263,7 @@ python -m dbmocker.enhanced_cli analyze \
 # Launch enhanced GUI (default)
 python -m dbmocker.cli gui
 
-# Launch legacy GUI 
+# Launch legacy GUI
 python -m dbmocker.cli gui --legacy
 ```
 
@@ -279,7 +279,7 @@ python run_enhanced_gui.py
 # Enhanced GUI
 python -m dbmocker.gui.enhanced_main
 
-# Legacy GUI  
+# Legacy GUI
 python -m dbmocker.gui.main
 ```
 
@@ -288,20 +288,22 @@ python -m dbmocker.gui.main
 DBMocker provides two GUI interfaces:
 
 #### Enhanced GUI (Default)
-- ✅ **Ultra-fast data reuse** (149K+ rows/sec)
-- ✅ **Modern tabbed interface** with 5 specialized tabs
-- ✅ **Real-time monitoring** (CPU, memory, progress)
-- ✅ **Advanced configuration** options
-- ✅ **Auto-optimization** suggestions
-- ✅ **Multi-threading** and performance modes
-- ✅ **Progress tracking** every 1000 records
+
+-   ✅ **Ultra-fast data reuse** (149K+ rows/sec)
+-   ✅ **Modern tabbed interface** with 5 specialized tabs
+-   ✅ **Real-time monitoring** (CPU, memory, progress)
+-   ✅ **Advanced configuration** options
+-   ✅ **Auto-optimization** suggestions
+-   ✅ **Multi-threading** and performance modes
+-   ✅ **Progress tracking** every 1000 records
 
 #### Legacy GUI (--legacy flag)
-- ✅ **Simple interface** for basic use cases
-- ✅ **Standard generation** features
-- ✅ **Database connection** and analysis
-- ✅ **Basic table configuration**
-- ⚠️ **Limited performance** features
+
+-   ✅ **Simple interface** for basic use cases
+-   ✅ **Standard generation** features
+-   ✅ **Database connection** and analysis
+-   ✅ **Basic table configuration**
+-   ⚠️ **Limited performance** features
 
 **Recommendation**: Use the Enhanced GUI for production workloads and the Legacy GUI only for simple testing.
 
