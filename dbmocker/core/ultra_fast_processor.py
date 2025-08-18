@@ -342,6 +342,11 @@ class UltraFastDataGenerator:
         if method == 'numpy_int':
             min_val = strategy.get('min_val', 1)
             max_val = strategy.get('max_val', 1000000)
+            
+            # Ensure min_val < max_val to avoid "low >= high" error
+            if min_val >= max_val:
+                max_val = min_val + 1000000
+            
             return np.random.randint(min_val, max_val, size=batch_size, dtype=np.int64)
         
         elif method == 'numpy_float':

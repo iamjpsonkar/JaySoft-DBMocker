@@ -450,7 +450,10 @@ class PatternBasedGenerator:
         if pattern.most_common_values and random.random() < 0.8:
             # Weight selection based on frequency
             total_count = sum(count for _, count in pattern.most_common_values)
-            rand_val = random.randint(1, total_count)
+            if total_count > 0:
+                rand_val = random.randint(1, total_count)
+            else:
+                return base_generator_func()
             current_count = 0
             
             for value, count in pattern.most_common_values:
@@ -539,9 +542,23 @@ class PatternBasedGenerator:
             else:
                 # Uniform distribution in observed range
                 if pattern.data_type.lower() in ['int', 'integer', 'bigint', 'smallint']:
-                    return random.randint(int(pattern.min_value), int(pattern.max_value))
+                    min_val = int(pattern.min_value)
+                    max_val = int(pattern.max_value)
+                    
+                    # Ensure min_val < max_val to avoid "low >= high" error
+                    if min_val >= max_val:
+                        max_val = min_val + 1000
+                    
+                    return random.randint(min_val, max_val)
                 else:
-                    return random.uniform(pattern.min_value, pattern.max_value)
+                    min_val = float(pattern.min_value)
+                    max_val = float(pattern.max_value)
+                    
+                    # Ensure min_val < max_val for uniform distribution
+                    if min_val >= max_val:
+                        max_val = min_val + 1000.0
+                    
+                    return random.uniform(min_val, max_val)
         
         return base_generator_func()
     
