@@ -1,4 +1,19 @@
-"""Main GUI application for DBMocker."""
+"""
+Main GUI application for DBMocker.
+
+NOTE: For enhanced performance features and modern UI, use the Enhanced GUI:
+    python run_enhanced_gui.py
+    
+    Or import from: dbmocker.gui.enhanced_main
+    
+The enhanced GUI includes:
+- Ultra-fast processing for millions of records
+- Advanced performance configuration
+- Real-time system monitoring
+- Modern tabbed interface
+- Smart duplicate handling
+- Multi-threading and connection pooling
+"""
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
@@ -2564,7 +2579,11 @@ Enterprise-grade mock data generation for professional development.'''
                                 if rows_to_generate > 50000:
                                     logger.info(f"⏳ Large dataset detected for {table_name}, monitoring progress...")
                                 
-                                data = spec_generator._generate_table_data(table_spec, rows_to_generate)
+                                # Pass stop flag to generator if supported
+                                if hasattr(spec_generator, '_generate_table_data_with_stop'):
+                                    data = spec_generator._generate_table_data_with_stop(table_spec, rows_to_generate, self.stop_generation_flag)
+                                else:
+                                    data = spec_generator._generate_table_data(table_spec, rows_to_generate)
                                 
                                 # Check if generation was successful
                                 if not data:
@@ -2670,9 +2689,15 @@ Enterprise-grade mock data generation for professional development.'''
                                 
                                 if hasattr(generator, 'generate_data_for_table_parallel') and use_parallel:
                                     logger.info(f"🔄 Table {table_name}: Using parallel generation (workers: {config.max_workers})")
+                                    # Pass stop flag to parallel generator if supported
+                                    if hasattr(generator, 'set_stop_flag'):
+                                        generator.set_stop_flag(self.stop_generation_flag)
                                     data = generator.generate_data_for_table_parallel(table_name, rows_to_generate)
                                 else:
                                     logger.info(f"🔄 Table {table_name}: Using sequential generation")
+                                    # Pass stop flag to sequential generator if supported
+                                    if hasattr(generator, 'set_stop_flag'):
+                                        generator.set_stop_flag(self.stop_generation_flag)
                                     data = generator.generate_data_for_table(table_name, rows_to_generate)
                                 
                                 # Check if generation was successful
