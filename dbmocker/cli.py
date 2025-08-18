@@ -685,14 +685,22 @@ def high_performance(driver, host, port, database, username, password, rows, bat
 
 
 @cli.command()
-def gui():
+@click.option('--legacy', is_flag=True, help='Use legacy GUI interface')
+def gui(legacy):
     """Launch the graphical user interface."""
     try:
-        from dbmocker.gui.main import launch_gui
-        click.echo("🚀 Launching JaySoft-DBMocker GUI...")
-        launch_gui()
-    except ImportError:
-        click.echo("❌ GUI dependencies not installed. Install with: pip install jaysoft-dbmocker[gui]", err=True)
+        if legacy:
+            click.echo("🚀 Launching Legacy JaySoft-DBMocker GUI...")
+            from dbmocker.gui.main import launch_gui
+            launch_gui()
+        else:
+            click.echo("🚀 Launching Enhanced JaySoft-DBMocker GUI...")
+            click.echo("✨ Features: Ultra-fast processing, real-time monitoring, advanced configuration")
+            from dbmocker.gui.enhanced_main import main
+            main()
+    except ImportError as e:
+        click.echo(f"❌ GUI dependencies not installed: {e}", err=True)
+        click.echo("Install with: pip install -r requirements.txt", err=True)
         sys.exit(1)
     except Exception as e:
         click.echo(f"❌ Failed to launch GUI: {e}", err=True)

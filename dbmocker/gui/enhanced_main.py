@@ -1169,7 +1169,7 @@ class EnhancedDBMockerGUI:
             # Analyze schema
             self.status_var.set("Analyzing schema...")
             analyzer = SchemaAnalyzer(self.db_connection)
-            self.schema = analyzer.analyze_schema(config.database or "default")
+            self.schema = analyzer.analyze_schema()
             
             # Update GUI
             self.connection_status.configure(text="✅ Connected and analyzed", foreground="green")
