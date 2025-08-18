@@ -24,6 +24,7 @@ class DuplicateStrategy(Enum):
     SMART_DUPLICATES = "smart_duplicates"  # Intelligent duplicate distribution
     CACHED_POOL = "cached_pool"         # Use cached value pools
     WEIGHTED_RANDOM = "weighted_random"  # Weighted random selection from pools
+    FAST_DATA_REUSE = "fast_data_reuse"  # Ultra-fast reuse of existing data
 
 
 class CacheStrategy(Enum):
@@ -103,6 +104,14 @@ class DuplicateConfiguration:
     reuse_existing_data: bool = True
     reuse_probability: float = 0.4
     prefer_recent_values: bool = True
+    
+    # Fast data reuse settings (NEW)
+    enable_fast_data_reuse: bool = False
+    data_reuse_sample_size: int = 10000  # How many existing rows to sample
+    data_reuse_probability: float = 0.95  # Probability of reusing vs generating
+    respect_constraints: bool = True  # Always respect database constraints
+    fast_insertion_mode: bool = True  # Use fastest possible insertion
+    progress_update_interval: int = 1000  # Progress update every N rows
 
 
 @dataclass
@@ -337,6 +346,8 @@ def create_high_performance_config(
     performance_mode: PerformanceMode = PerformanceMode.HIGH_SPEED,
     enable_duplicates: bool = True,
     duplicate_strategy: DuplicateStrategy = DuplicateStrategy.SMART_DUPLICATES,
+    batch_size: Optional[int] = None,
+    max_workers: Optional[int] = None,
     **kwargs
 ) -> EnhancedGenerationConfig:
     """Create optimized configuration for high-performance generation."""
@@ -346,25 +357,34 @@ def create_high_performance_config(
     
     if performance_mode == PerformanceMode.ULTRA_HIGH:
         perf_settings.performance_mode = performance_mode
-        perf_settings.max_workers = min(16, perf_settings.max_workers * 2)
+        perf_settings.max_workers = max_workers or min(16, perf_settings.max_workers * 2)
         perf_settings.enable_multiprocessing = True
         perf_settings.max_processes = 4
         perf_settings.cache_strategy = CacheStrategy.MEMORY_MAPPED
         perf_settings.insertion_strategy = InsertionStrategy.PARALLEL_BULK
-        perf_settings.batch_size = 50000
+        perf_settings.batch_size = batch_size or 50000
         perf_settings.connection_pool_size = 20
     elif performance_mode == PerformanceMode.HIGH_SPEED:
         perf_settings.performance_mode = performance_mode
+        perf_settings.max_workers = max_workers or perf_settings.max_workers
         perf_settings.cache_strategy = CacheStrategy.INTELLIGENT_CACHE
         perf_settings.insertion_strategy = InsertionStrategy.BULK_INSERT
-        perf_settings.batch_size = 25000
+        perf_settings.batch_size = batch_size or 25000
         perf_settings.connection_pool_size = 12
     elif performance_mode == PerformanceMode.MEMORY_EFFICIENT:
         perf_settings.performance_mode = performance_mode
+        perf_settings.max_workers = max_workers or perf_settings.max_workers
         perf_settings.max_chunk_size = 10000
         perf_settings.cache_strategy = CacheStrategy.SIMPLE_CACHE
         perf_settings.cache_size_mb = 100
         perf_settings.insertion_strategy = InsertionStrategy.STREAMING_INSERT
+        perf_settings.batch_size = batch_size or perf_settings.batch_size
+    else:
+        # Apply overrides for other modes
+        if max_workers:
+            perf_settings.max_workers = max_workers
+        if batch_size:
+            perf_settings.batch_size = batch_size
     
     # Duplicate settings
     dup_config = DuplicateConfiguration()
@@ -380,6 +400,13 @@ def create_high_performance_config(
             dup_config.pool_size_small = 10
             dup_config.pool_size_medium = 50
             dup_config.pool_size_large = 200
+        elif duplicate_strategy == DuplicateStrategy.FAST_DATA_REUSE:
+            dup_config.enable_fast_data_reuse = True
+            dup_config.data_reuse_sample_size = kwargs.get('sample_size', 10000)
+            dup_config.data_reuse_probability = kwargs.get('reuse_probability', 0.95)
+            dup_config.fast_insertion_mode = True
+            dup_config.respect_constraints = True
+            dup_config.progress_update_interval = kwargs.get('progress_interval', 1000)
     
     # Create enhanced config
     config = EnhancedGenerationConfig(

@@ -14,12 +14,12 @@ logger = logging.getLogger(__name__)
 class DatabaseConfig(BaseModel):
     """Configuration model for database connections."""
     
+    driver: str = Field(default="postgresql", description="Database driver")
     host: str = Field(..., description="Database host")
     port: int = Field(..., description="Database port")
     database: str = Field(default="", description="Database name")
     username: str = Field(..., description="Database username")
     password: str = Field(..., description="Database password")
-    driver: str = Field(default="postgresql", description="Database driver")
     ssl_mode: Optional[str] = Field(default=None, description="SSL mode")
     charset: str = Field(default="utf8mb4", description="Character set")
     
@@ -30,11 +30,12 @@ class DatabaseConfig(BaseModel):
             raise ValueError(f"Unsupported driver: {v}. Supported: {supported_drivers}")
         return v
     
-    @validator("port", always=True)
+    @validator("port")
     def validate_port(cls, v, values):
-        # Allow port 0 for SQLite
-        if values.get("driver") == "sqlite" and v == 0:
-            return v
+        # Allow port 0 for SQLite (SQLite doesn't use ports)
+        driver = values.get("driver", "postgresql")  # Default to postgresql if not set
+        if driver == "sqlite":
+            return v  # Any port value is acceptable for SQLite, will be ignored
         if not 1 <= v <= 65535:
             raise ValueError("Port must be between 1 and 65535")
         return v

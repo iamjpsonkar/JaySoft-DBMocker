@@ -59,11 +59,11 @@ def cli(ctx, verbose, quiet):
 
 
 @cli.command()
-@click.option('--host', '-h', required=True, help='Database host')
-@click.option('--port', '-p', type=int, required=True, help='Database port')
+@click.option('--host', '-h', default='', help='Database host (not required for SQLite)')
+@click.option('--port', '-p', type=int, default=0, help='Database port (not required for SQLite)')
 @click.option('--database', '-d', required=True, help='Database name')
-@click.option('--username', '-u', required=True, help='Database username')
-@click.option('--password', '-w', required=True, help='Database password')
+@click.option('--username', '-u', default='', help='Database username (not required for SQLite)')
+@click.option('--password', '-w', default='', help='Database password (not required for SQLite)')
 @click.option('--driver', type=click.Choice(['postgresql', 'mysql', 'sqlite']), 
               default='postgresql', help='Database driver')
 @click.option('--table', '-t', help='Specific table name (default: all tables)')
@@ -73,7 +73,7 @@ def cli(ctx, verbose, quiet):
               default='balanced', help='Performance optimization mode')
 @click.option('--enable-duplicates', is_flag=True, help='Enable duplicate value generation')
 @click.option('--duplicate-strategy',
-              type=click.Choice(['generate_new', 'allow_simple', 'smart_duplicates', 'cached_pool']),
+              type=click.Choice(['generate_new', 'allow_simple', 'smart_duplicates', 'cached_pool', 'fast_data_reuse']),
               default='smart_duplicates', help='Duplicate handling strategy')
 @click.option('--batch-size', type=int, help='Batch size for operations (auto-calculated if not set)')
 @click.option('--max-workers', type=int, help='Maximum number of worker threads (auto-calculated if not set)')
@@ -85,10 +85,14 @@ def cli(ctx, verbose, quiet):
 @click.option('--output-path', help='Output file path (for non-database formats)')
 @click.option('--config-file', help='Configuration file path (JSON/YAML)')
 @click.option('--dry-run', is_flag=True, help='Dry run - analyze only, do not generate data')
+@click.option('--sample-size', type=int, default=10000, help='Sample size for fast data reuse (default: 10000)')
+@click.option('--reuse-probability', type=float, default=0.95, help='Probability of reusing data (default: 0.95)')
+@click.option('--progress-interval', type=int, default=1000, help='Progress update interval in rows (default: 1000)')
 @click.pass_context
 def generate(ctx, host, port, database, username, password, driver, table, rows,
              performance_mode, enable_duplicates, duplicate_strategy, batch_size, max_workers,
-             streaming, seed, truncate, output_format, output_path, config_file, dry_run):
+             streaming, seed, truncate, output_format, output_path, config_file, dry_run,
+             sample_size, reuse_probability, progress_interval):
     """
     Generate mock data with ultra-fast performance.
     
@@ -105,6 +109,13 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
     dbmocker generate -h localhost -p 5432 -d mydb -u user -w pass \\
                      --table users --rows 500000 \\
                      --duplicate-strategy smart_duplicates
+    
+    \b
+    # Use fast data reuse for ultra-fast insertion of millions
+    dbmocker generate -h localhost -p 5432 -d mydb -u user -w pass \\
+                     --table users --rows 10000000 \\
+                     --duplicate-strategy fast_data_reuse \\
+                     --sample-size 50000 --reuse-probability 0.95
     
     \b
     # Use configuration file
@@ -139,7 +150,8 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
             # Analyze schema
             click.echo("🔍 Analyzing database schema...")
             analyzer = SchemaAnalyzer(db_conn)
-            schema = analyzer.analyze_schema(database)
+            include_tables = [table] if table else None
+            schema = analyzer.analyze_schema(include_tables=include_tables)
             
             if dry_run:
                 display_schema_analysis(schema, table)
@@ -173,6 +185,19 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
                 truncate_existing=truncate
             )
             
+            # Apply fast data reuse settings if selected
+            if duplicate_strategy == 'fast_data_reuse':
+                config.duplicates.enable_fast_data_reuse = True
+                config.duplicates.data_reuse_sample_size = sample_size
+                config.duplicates.data_reuse_probability = reuse_probability
+                config.duplicates.progress_update_interval = progress_interval
+                config.duplicates.fast_insertion_mode = True
+                config.duplicates.respect_constraints = True
+                click.echo(f"🔄 Fast Data Reuse configured:")
+                click.echo(f"   Sample size: {sample_size:,}")
+                click.echo(f"   Reuse probability: {reuse_probability:.1%}")
+                click.echo(f"   Progress interval: {progress_interval:,} rows")
+            
             # Override streaming setting
             if streaming:
                 config.generation_mode = "streaming"
@@ -187,7 +212,13 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
             # Choose processor based on scale and performance mode
             total_rows = sum(target_tables.values())
             
-            if perf_mode == PerformanceMode.ULTRA_HIGH or total_rows >= 1000000:
+            # Force ultra-fast processor for fast data reuse or large datasets
+            use_ultra_fast = (perf_mode == PerformanceMode.ULTRA_HIGH or 
+                            total_rows >= 1000000 or 
+                            config.duplicates.enable_fast_data_reuse or
+                            duplicate_strategy == 'fast_data_reuse')
+            
+            if use_ultra_fast:
                 click.echo("⚡ Using Ultra-Fast Processor for maximum performance")
                 processor = create_ultra_fast_processor(schema, config, db_conn)
                 
@@ -196,9 +227,12 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
                     click.echo(f"\n🚀 Processing table '{table_name}': {row_count:,} rows")
                     
                     def progress_callback(table, current, total):
-                        if current % 50000 == 0:  # Update every 50K rows
+                        # Update every 1000 records as requested
+                        if current % progress_interval == 0:
                             progress = (current / total) * 100
-                            click.echo(f"  📊 Progress: {current:,}/{total:,} ({progress:.1f}%)")
+                            elapsed = time.time() - start_time
+                            rate = current / elapsed if elapsed > 0 else 0
+                            click.echo(f"  📊 {table}: {current:,}/{total:,} ({progress:.1f}%) | Rate: {rate:,.0f} rows/s")
                     
                     report = processor.process_millions_of_records(
                         table_name, row_count, progress_callback
@@ -239,11 +273,11 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
 
 
 @cli.command()
-@click.option('--host', '-h', required=True, help='Database host')
-@click.option('--port', '-p', type=int, required=True, help='Database port')
+@click.option('--host', '-h', default='', help='Database host (not required for SQLite)')
+@click.option('--port', '-p', type=int, default=0, help='Database port (not required for SQLite)')
 @click.option('--database', '-d', required=True, help='Database name')
-@click.option('--username', '-u', required=True, help='Database username')
-@click.option('--password', '-w', required=True, help='Database password')
+@click.option('--username', '-u', default='', help='Database username (not required for SQLite)')
+@click.option('--password', '-w', default='', help='Database password (not required for SQLite)')
 @click.option('--driver', type=click.Choice(['postgresql', 'mysql', 'sqlite']), 
               default='postgresql', help='Database driver')
 @click.option('--table', '-t', help='Specific table name (default: all tables)')
@@ -279,7 +313,8 @@ def analyze(host, port, database, username, password, driver, table, output_form
             # Analyze schema
             click.echo("🔍 Analyzing database schema...")
             analyzer = SchemaAnalyzer(db_conn)
-            schema = analyzer.analyze_schema(database)
+            include_tables = [table] if table else None
+            schema = analyzer.analyze_schema(include_tables=include_tables)
             
             # Display analysis
             if table:

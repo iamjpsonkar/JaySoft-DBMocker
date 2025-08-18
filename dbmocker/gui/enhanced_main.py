@@ -270,12 +270,14 @@ class DuplicateConfigPanel:
             ("Allow Simple", "allow_simple", "Allow simple duplicate values"),
             ("Smart Duplicates", "smart_duplicates", "Intelligent distribution of duplicates"),
             ("Cached Pool", "cached_pool", "Use cached value pools for maximum performance"),
-            ("Weighted Random", "weighted_random", "Weighted random selection from value pools")
+            ("Weighted Random", "weighted_random", "Weighted random selection from value pools"),
+            ("Fast Data Reuse", "fast_data_reuse", "Ultra-fast reuse of existing data (fastest option)")
         ]
         
         for text, value, tooltip in strategies:
             rb = ttk.Radiobutton(self.strategy_frame, text=text, 
-                                variable=self.duplicate_strategy, value=value)
+                                variable=self.duplicate_strategy, value=value,
+                                command=self.on_strategy_change)
             rb.pack(anchor=tk.W, padx=(10, 0))
             ModernToolTip(rb, tooltip)
         
@@ -317,6 +319,56 @@ class DuplicateConfigPanel:
         large_spinbox.pack(side=tk.LEFT, padx=(10, 0))
         ModernToolTip(large_spinbox, "Pool size for diverse values")
         
+        # Fast data reuse settings
+        reuse_frame = ttk.LabelFrame(self.advanced_frame, text="Fast Data Reuse Settings", padding=5)
+        reuse_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        # Sample size
+        sample_frame = ttk.Frame(reuse_frame)
+        sample_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(sample_frame, text="Sample Size:").pack(side=tk.LEFT)
+        self.sample_size = tk.IntVar(value=10000)
+        sample_spinbox = ttk.Spinbox(sample_frame, from_=1000, to=100000, width=10,
+                                    textvariable=self.sample_size)
+        sample_spinbox.pack(side=tk.LEFT, padx=(10, 20))
+        ModernToolTip(sample_spinbox, "Number of existing rows to sample for reuse")
+        
+        # Data reuse probability
+        reuse_prob_frame = ttk.Frame(reuse_frame)
+        reuse_prob_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(reuse_prob_frame, text="Reuse Probability:").pack(side=tk.LEFT)
+        self.data_reuse_probability = tk.DoubleVar(value=0.95)
+        reuse_prob_scale = ttk.Scale(reuse_prob_frame, from_=0.0, to=1.0, 
+                                    variable=self.data_reuse_probability,
+                                    orient=tk.HORIZONTAL, length=120)
+        reuse_prob_scale.pack(side=tk.LEFT, padx=(10, 5))
+        
+        self.reuse_prob_label = ttk.Label(reuse_prob_frame, text="95%")
+        self.reuse_prob_label.pack(side=tk.LEFT)
+        
+        reuse_prob_scale.configure(command=self.update_reuse_probability_label)
+        ModernToolTip(reuse_prob_scale, "Probability of reusing existing data vs generating new")
+        
+        # Progress update interval
+        progress_frame = ttk.Frame(reuse_frame)
+        progress_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(progress_frame, text="Progress Interval:").pack(side=tk.LEFT)
+        self.progress_interval = tk.IntVar(value=1000)
+        progress_spinbox = ttk.Spinbox(progress_frame, from_=100, to=10000, width=8,
+                                      textvariable=self.progress_interval)
+        progress_spinbox.pack(side=tk.LEFT, padx=(10, 0))
+        ModernToolTip(progress_spinbox, "Progress update interval (every N rows)")
+        
+        # Fast insertion mode
+        self.fast_insertion_mode = tk.BooleanVar(value=True)
+        fast_check = ttk.Checkbutton(reuse_frame, text="Enable Fast Insertion Mode",
+                                    variable=self.fast_insertion_mode)
+        fast_check.pack(anchor=tk.W, pady=2)
+        ModernToolTip(fast_check, "Use fastest possible insertion optimizations")
+        
         # Initially disable duplicate options
         self.toggle_duplicate_options()
     
@@ -324,6 +376,16 @@ class DuplicateConfigPanel:
         """Update probability label."""
         prob = float(value)
         self.prob_label.config(text=f"{prob*100:.0f}%")
+    
+    def update_reuse_probability_label(self, value):
+        """Update reuse probability label."""
+        prob = float(value)
+        self.reuse_prob_label.config(text=f"{prob*100:.0f}%")
+    
+    def on_strategy_change(self):
+        """Handle strategy change to suggest optimal settings."""
+        # This method will be called from the main GUI
+        pass
     
     def toggle_duplicate_options(self):
         """Toggle duplicate options based on enable checkbox."""
@@ -346,7 +408,14 @@ class DuplicateConfigPanel:
             global_duplicate_strategy=DuplicateStrategy(self.duplicate_strategy.get()) if self.enable_duplicates.get() else DuplicateStrategy.GENERATE_NEW,
             global_duplicate_probability=self.duplicate_probability.get(),
             pool_size_small=self.pool_size_small.get(),
-            pool_size_large=self.pool_size_large.get()
+            pool_size_large=self.pool_size_large.get(),
+            # Fast data reuse settings
+            enable_fast_data_reuse=(self.duplicate_strategy.get() == "fast_data_reuse"),
+            data_reuse_sample_size=self.sample_size.get(),
+            data_reuse_probability=self.data_reuse_probability.get(),
+            respect_constraints=True,  # Always respect constraints
+            fast_insertion_mode=self.fast_insertion_mode.get(),
+            progress_update_interval=self.progress_interval.get()
         )
 
 
@@ -530,7 +599,7 @@ class ProgressMonitor:
         self.pause_button.configure(state=tk.NORMAL)
     
     def update_progress(self, current_rows, current_table="", rate=0):
-        """Update progress."""
+        """Update progress with enhanced tracking every 1000 records."""
         if hasattr(self, 'total_rows') and self.total_rows > 0:
             progress = (current_rows / self.total_rows) * 100
             self.overall_progress['value'] = progress
@@ -540,6 +609,14 @@ class ProgressMonitor:
         
         if current_table:
             self.current_table_var.set(f"Current: {current_table}")
+        
+        # Enhanced status for every 1000 records
+        if current_rows % 1000 == 0:
+            elapsed_time = time.time() - self.start_time if hasattr(self, 'start_time') else 0
+            avg_rate = current_rows / elapsed_time if elapsed_time > 0 else 0
+            
+            status_msg = f"🚀 {current_rows:,} rows | {rate:,.0f} rows/s | Avg: {avg_rate:,.0f} rows/s"
+            self.status_var.set(status_msg)
         
         # Calculate ETA
         if rate > 0 and hasattr(self, 'total_rows'):
@@ -807,6 +884,9 @@ class EnhancedDBMockerGUI:
         # Duplicate configuration
         self.duplicate_panel = DuplicateConfigPanel(left_column)
         self.duplicate_panel.frame.pack(fill=tk.X)
+        
+        # Connect strategy change callback
+        self.duplicate_panel.on_strategy_change = self.on_duplicate_strategy_change
         
         # Table configuration
         self.table_panel = TableConfigPanel(right_column)
@@ -1268,11 +1348,63 @@ class EnhancedDBMockerGUI:
                     self.log_message(f"✅ {table_name}: {stats.total_rows_generated:,} rows generated")
             
             else:
-                # Standard generation (fallback to existing implementation)
-                self.log_message("🔄 Starting standard generation...")
-                # This would use the existing DataGenerator
-                # Implementation omitted for brevity
-                pass
+                # Standard generation - use appropriate processor based on config
+                total_rows = sum(table_configs.values())
+                
+                # Auto-upgrade to ultra-fast if fast data reuse is enabled or large dataset
+                if (config.duplicates.enable_fast_data_reuse or 
+                    config.duplicates.global_duplicate_strategy == DuplicateStrategy.FAST_DATA_REUSE or
+                    total_rows >= 100000):
+                    
+                    self.log_message("🚀 Auto-upgrading to ultra-fast processing...")
+                    processor = create_ultra_fast_processor(self.schema, config, self.db_connection)
+                    self.current_generator = processor
+                    
+                    for table_name, row_count in table_configs.items():
+                        if self.stop_generation_flag.is_set():
+                            break
+                        
+                        self.log_message(f"Processing {table_name}: {row_count:,} rows")
+                        
+                        # Progress callback
+                        def progress_callback(table, current, total):
+                            rate = current / (time.time() - total_start_time) if time.time() > total_start_time else 0
+                            self.update_progress(total_generated + current, table, rate)
+                            self.system_monitor.update_performance(rate, total_generated + current)
+                        
+                        # Generate data
+                        report = processor.process_millions_of_records(
+                            table_name, row_count, progress_callback
+                        )
+                        
+                        total_generated += report.total_rows_generated
+                        self.log_message(f"✅ {table_name}: {report.total_rows_generated:,} rows generated")
+                
+                else:
+                    # Use high-performance generator for smaller datasets
+                    self.log_message("📈 Starting high-performance generation...")
+                    generator = HighPerformanceGenerator(self.schema, config, self.db_connection)
+                    self.current_generator = generator
+                    
+                    for table_name, row_count in table_configs.items():
+                        if self.stop_generation_flag.is_set():
+                            break
+                        
+                        self.log_message(f"Generating {table_name}: {row_count:,} rows")
+                        
+                        # Progress callback
+                        def progress_callback(table, current, total):
+                            rate = current / (time.time() - total_start_time) if time.time() > total_start_time else 0
+                            self.update_progress(total_generated + current, table, rate)
+                            self.system_monitor.update_performance(rate, total_generated + current)
+                        
+                        # Generate data
+                        stats = generator.generate_millions_of_records(
+                            table_name, row_count, use_streaming=self.use_streaming.get()
+                        )
+                        
+                        total_generated += stats.get('rows_generated', row_count)
+                        self.log_message(f"✅ {table_name}: {stats.get('rows_generated', row_count):,} rows generated")
             
             # Complete
             total_time = time.time() - total_start_time
@@ -1314,6 +1446,23 @@ class EnhancedDBMockerGUI:
         self.generate_button.configure(state=tk.NORMAL)
         self.stop_button.configure(state=tk.DISABLED)
         self.status_var.set("Generation completed")
+    
+    def on_duplicate_strategy_change(self):
+        """Handle duplicate strategy change to suggest optimal settings."""
+        strategy = self.duplicate_panel.duplicate_strategy.get()
+        
+        if strategy == "fast_data_reuse":
+            # Suggest ultra-fast mode for best performance
+            current_mode = self.generation_mode.get()
+            if current_mode != "ultra_fast":
+                result = messagebox.askyesno(
+                    "Optimization Suggestion",
+                    "Fast Data Reuse works best with Ultra-Fast Processing mode.\n\n"
+                    "Would you like to switch to Ultra-Fast Processing for optimal performance?"
+                )
+                if result:
+                    self.generation_mode.set("ultra_fast")
+                    self.log_message("🚀 Switched to Ultra-Fast Processing mode for optimal fast data reuse")
     
     def update_progress(self, current_rows: int, current_table: str, rate: float):
         """Update progress in main thread."""

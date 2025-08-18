@@ -11,6 +11,7 @@ import threading
 import multiprocessing as mp
 import queue
 import numpy as np
+from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Iterator, Union
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ from .enhanced_models import (
     EnhancedGenerationConfig, PerformanceMode, DuplicateStrategy, 
     InsertionStrategy, PerformanceReport
 )
+from .fast_data_reuse import FastDataReuser, create_fast_data_reuser, DataReuse
 
 
 logger = logging.getLogger(__name__)
@@ -500,6 +502,23 @@ class UltraFastProcessor:
         self.generator = UltraFastDataGenerator(schema, config)
         self.inserter = UltraFastInserter(db_connection.config, config.performance)
         
+        # Initialize fast data reuser if enabled
+        self.fast_data_reuser = None
+        if (config.duplicates.enable_fast_data_reuse or 
+            config.duplicates.global_duplicate_strategy == DuplicateStrategy.FAST_DATA_REUSE):
+            
+            data_reuse_config = DataReuse(
+                enable_data_reuse=True,
+                sample_size=config.duplicates.data_reuse_sample_size,
+                reuse_probability=config.duplicates.data_reuse_probability,
+                constraint_respect=config.duplicates.respect_constraints,
+                fast_mode=config.duplicates.fast_insertion_mode,
+                progress_interval=config.duplicates.progress_update_interval
+            )
+            
+            self.fast_data_reuser = FastDataReuser(db_connection, schema, data_reuse_config)
+            logger.info("🔄 Fast data reuser enabled for ultra-fast insertion")
+        
         # Performance tracking
         self.start_time = None
         self.report = PerformanceReport()
@@ -513,6 +532,13 @@ class UltraFastProcessor:
         
         logger.info(f"🎯 Processing {total_rows:,} records for table '{table_name}'")
         logger.info(f"⚙️  Performance mode: {self.config.performance.performance_mode}")
+        
+        # Check if fast data reuse is enabled and applicable
+        if (self.fast_data_reuser and 
+            (self.config.duplicates.enable_fast_data_reuse or 
+             self.config.duplicates.global_duplicate_strategy == DuplicateStrategy.FAST_DATA_REUSE)):
+            logger.info("🔄 Using fast data reuse for ultra-fast insertion")
+            return self._process_with_fast_data_reuse(table_name, total_rows, progress_callback)
         
         # Choose optimal strategy based on scale
         if total_rows >= 1000000:  # 1M+ records
@@ -677,6 +703,52 @@ class UltraFastProcessor:
         logger.info(f"🎉 Standard-scale completed: {total_inserted:,} rows in {total_time:.2f}s ({overall_rate:,.0f} rows/s)")
         
         return self.report
+    
+    def _process_with_fast_data_reuse(self, table_name: str, total_rows: int,
+                                    progress_callback: Optional[callable] = None) -> PerformanceReport:
+        """Process using fast data reuse for ultra-fast insertion."""
+        logger.info(f"🔄 Fast data reuse processing: {total_rows:,} records")
+        
+        try:
+            # Enhanced progress callback that includes performance tracking
+            def enhanced_progress_callback(table, current, total):
+                if progress_callback:
+                    progress_callback(table, current, total)
+                
+                # Update performance metrics
+                elapsed = time.time() - self.start_time
+                rate = current / elapsed if elapsed > 0 else 0
+                
+                # Log progress every 10K rows for very frequent updates
+                if current % 10000 == 0:
+                    logger.info(f"🚀 Fast reuse progress: {current:,}/{total:,} ({rate:,.0f} rows/s)")
+            
+            # Use fast data reuser for ultra-fast insertion
+            result = self.fast_data_reuser.fast_insert_millions(
+                table_name, total_rows, enhanced_progress_callback
+            )
+            
+            # Convert to PerformanceReport
+            total_time = result['time_seconds']
+            self.report.total_rows_generated = result['rows_inserted']
+            self.report.total_time_seconds = total_time
+            self.report.average_rows_per_second = result['average_rate']
+            
+            # Get reuse statistics
+            reuse_stats = self.fast_data_reuser.get_reuse_statistics(table_name)
+            
+            logger.info(f"🎉 Fast data reuse completed!")
+            logger.info(f"📊 Final stats: {result['rows_inserted']:,} rows in {total_time:.2f}s ({result['average_rate']:,.0f} rows/s)")
+            logger.info(f"🔄 Reuse efficiency: {reuse_stats.get('reuse_ratio', 0):.1%}")
+            logger.info(f"📝 Method: {result['method']}")
+            
+            return self.report
+            
+        except Exception as e:
+            logger.error(f"❌ Fast data reuse failed: {e}")
+            # Fallback to standard processing
+            logger.info("🔄 Falling back to standard ultra-scale processing")
+            return self._process_ultra_scale(table_name, total_rows, progress_callback)
     
     def _process_worker_task(self, task: UltraFastTask) -> Dict[str, Any]:
         """Process a worker task."""
