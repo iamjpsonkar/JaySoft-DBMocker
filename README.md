@@ -73,6 +73,7 @@ dbmocker generate -h localhost -p 5432 -d mydb -u user \
 
 # Launch GUI
 dbmocker gui
+python -m dbmocker.cli gui
 ```
 
 #### Python API
@@ -500,12 +501,13 @@ python cleanup.py --force
 ```
 
 The cleanup script removes:
-- Python cache files (`__pycache__/`, `*.pyc`)
-- Build artifacts (`*.egg-info/`, `dist/`)
-- Demo databases (`*.db`, `*.sqlite`)
-- Configuration files (`*_config.yaml`)
-- Log files (`*.log`)
-- OS-generated files (`.DS_Store`, `Thumbs.db`)
+
+-   Python cache files (`__pycache__/`, `*.pyc`)
+-   Build artifacts (`*.egg-info/`, `dist/`)
+-   Demo databases (`*.db`, `*.sqlite`)
+-   Configuration files (`*_config.yaml`)
+-   Log files (`*.log`)
+-   OS-generated files (`.DS_Store`, `Thumbs.db`)
 
 For detailed usage instructions, see [docs/CLEANUP.md](docs/CLEANUP.md).
 
