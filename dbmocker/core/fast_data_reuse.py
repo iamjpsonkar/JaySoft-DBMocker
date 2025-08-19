@@ -16,7 +16,7 @@ from sqlalchemy import text, MetaData, Table, inspect
 from tqdm import tqdm
 
 from .database import DatabaseConnection
-from .models import DatabaseSchema, TableInfo, ColumnInfo, ConstraintType
+from .models import DatabaseSchema, TableInfo, ColumnInfo, ConstraintType, ColumnType
 from .enhanced_models import EnhancedGenerationConfig, PerformanceSettings
 
 
@@ -294,34 +294,89 @@ class FastDataReuser:
         """Create constraint-safe data for reuse."""
         constraint_safe_data = []
         
+        # Get table info for NOT NULL checking
+        table_info = None
+        for table in self.schema.tables:
+            if table.name == data_pool.table_name:
+                table_info = table
+                break
+        
+        # Forbidden columns that should never be included
+        forbidden_columns = (
+            set(constraints.get('auto_increment_columns', [])) |
+            set(constraints.get('primary_keys', [])) |
+            set(constraints.get('unique_columns', []))
+        )
+        
         for row in data_pool.sampled_data:
             safe_row = {}
             
-            for column_name, value in row.items():
-                # Skip auto-increment columns (they'll be generated automatically)
-                if column_name in constraints['auto_increment_columns']:
-                    continue
-                
-                # Skip primary keys (they must be unique)
-                if column_name in constraints['primary_keys']:
-                    continue
-                
-                # Skip unique columns (they must be unique)
-                if column_name in constraints['unique_columns']:
-                    continue
-                
-                # Include constraint-free columns
-                if column_name in constraints['constraint_free_columns']:
-                    safe_row[column_name] = value
-                
-                # Include foreign keys (they can be duplicated safely)
-                elif column_name in constraints['foreign_keys']:
-                    safe_row[column_name] = value
+            # CRITICAL FIX: Ensure ALL table columns are represented
+            if table_info:
+                for column_info in table_info.columns:
+                    column_name = column_info.name
+                    
+                    # Skip forbidden columns
+                    if column_name in forbidden_columns:
+                        continue
+                    
+                    # Get value from sampled row or generate fallback
+                    if column_name in row:
+                        value = row[column_name]
+                        if value is not None:
+                            safe_row[column_name] = value
+                        elif not column_info.is_nullable:
+                            # Generate fallback for NOT NULL columns with NULL values
+                            fallback_value = self._generate_fallback_for_null_column(column_info)
+                            safe_row[column_name] = fallback_value
+                            logger.debug(f"Generated fallback for NULL NOT NULL column {column_name}: {fallback_value}")
+                        # Skip NULL values for nullable columns
+                    else:
+                        # Column missing entirely from sampled data
+                        if not column_info.is_nullable:
+                            # Generate value for missing NOT NULL columns
+                            fallback_value = self._generate_fallback_for_null_column(column_info)
+                            safe_row[column_name] = fallback_value
+                            logger.info(f"Generated value for missing NOT NULL column {column_name}: {fallback_value}")
+                        # Don't add anything for missing nullable columns
+            else:
+                # Fallback to original logic if no table info
+                for column_name, value in row.items():
+                    if column_name not in forbidden_columns and value is not None:
+                        safe_row[column_name] = value
             
             if safe_row:  # Only add if there are columns to reuse
                 constraint_safe_data.append(safe_row)
         
         return constraint_safe_data
+    
+    def _generate_fallback_for_null_column(self, column: ColumnInfo) -> Any:
+        """Generate a fallback value for NULL values in NOT NULL columns."""
+        import random
+        from datetime import datetime, date
+        
+        if column.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
+            return 1
+        elif column.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
+            return 1.0
+        elif column.data_type == ColumnType.BOOLEAN:
+            return 0
+        elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
+            column_name = column.name.lower()
+            if 'id' in column_name:
+                return f"reuse_id_{random.randint(1, 1000)}"
+            elif 'name' in column_name:
+                return f"reuse_name_{random.randint(1, 100)}"
+            elif 'email' in column_name:
+                return f"reuse{random.randint(1, 1000)}@example.com"
+            else:
+                return f"reuse_value_{random.randint(1, 1000)}"
+        elif column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP]:
+            return datetime.now()
+        elif column.data_type == ColumnType.DATE:
+            return date.today()
+        else:
+            return f"reuse_fallback_{random.randint(1, 1000)}"
     
     def fast_insert_millions(self, table_name: str, target_rows: int,
                            progress_callback: Optional[callable] = None) -> Dict[str, Any]:
