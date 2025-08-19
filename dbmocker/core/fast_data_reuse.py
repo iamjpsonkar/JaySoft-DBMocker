@@ -95,7 +95,22 @@ class ConstraintAnalyzer:
                 constraints['constraint_free_columns'].append(column.name)
         
         self.constraint_cache[table_name] = constraints
+        logger.debug(f"Constraint analysis for {table_name}: {constraints}")
         return constraints
+    
+    def _is_foreign_key_column(self, table: TableInfo, column_name: str) -> bool:
+        """Check if a column is a foreign key."""
+        # Check if the column has foreign key constraints
+        for constraint in table.constraints:
+            if constraint.constraint_type == ConstraintType.FOREIGN_KEY:
+                if column_name in constraint.columns:
+                    return True
+        
+        # Heuristic: column names ending with '_id' are likely foreign keys
+        if column_name.lower().endswith('_id') and column_name.lower() != 'id':
+            return True
+            
+        return False
     
     def _is_unique_column(self, table: TableInfo, column_name: str) -> bool:
         """Check if column has unique constraint."""
@@ -248,6 +263,9 @@ class FastDataReuser:
         self.constraint_analyzer = ConstraintAnalyzer(db_connection, schema)
         self.data_sampler = ExistingDataSampler(db_connection)
         
+        # Track unique value counters to ensure truly unique values across millions of records
+        self.unique_counters = {}
+        
         # Cache for reusable data
         self.data_pools = {}
         
@@ -367,45 +385,93 @@ class FastDataReuser:
         
         return constraint_safe_data
     
+    def _get_valid_foreign_key_value(self, column_info: ColumnInfo, table_name: str) -> Any:
+        """Get a valid foreign key value from the referenced table."""
+        try:
+            # Simple heuristic to find referenced table and column
+            column_name = column_info.name.lower()
+            
+            # Common FK patterns
+            if column_name == 'merchant_id':
+                referenced_table = 'merchant'
+                referenced_column = 'id'
+            elif column_name.endswith('_id'):
+                # Try to derive table name from column name
+                referenced_table = column_name[:-3]  # Remove '_id'
+                referenced_column = 'id'
+            else:
+                logger.debug(f"Cannot derive referenced table for column {column_name}")
+                return None
+            
+            # Get existing values from the referenced table
+            quoted_table = self.db_connection.quote_identifier(referenced_table)
+            quoted_column = self.db_connection.quote_identifier(referenced_column)
+            query = f"SELECT {quoted_column} FROM {quoted_table} ORDER BY RAND() LIMIT 1"
+            
+            logger.debug(f"Getting FK value for {column_name} from {referenced_table}: {query}")
+            result = self.db_connection.execute_query(query)
+            
+            if result and result[0]:
+                fk_value = result[0][0]
+                logger.debug(f"Found valid FK value for {column_name}: {fk_value}")
+                return fk_value
+            else:
+                logger.warning(f"No valid FK values found in {referenced_table}.{referenced_column}")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Could not get valid FK value for {column_info.name}: {e}")
+            return None
+    
     def _generate_unique_value_for_column(self, column_info: ColumnInfo, table_name: str) -> Any:
         """Generate a unique value for a column to avoid constraint violations."""
         import uuid
         import random
         import time
         
+        # Create a unique key for this column to track its counter
+        counter_key = f"{table_name}.{column_info.name}"
+        
+        # Initialize counter if not exists
+        if counter_key not in self.unique_counters:
+            self.unique_counters[counter_key] = random.randint(1000000, 9999999)  # Start with a high base
+        
+        # Increment counter for true uniqueness
+        self.unique_counters[counter_key] += 1
+        current_counter = self.unique_counters[counter_key]
+        
         if column_info.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
-            # For integer columns, use a safer range to avoid overflow
-            # Check if this is a foreign key column that needs special handling
+            # For integer columns, use the counter directly to ensure uniqueness
             column_name = column_info.name.lower()
             if 'id' in column_name and column_name.endswith('_id'):
-                # For FK columns, use a modest range that won't exceed INT limits
-                base = random.randint(10000, 50000)
-                return base + random.randint(1, 999)
+                # For FK columns, use a modest counter-based range
+                return 50000 + current_counter
             else:
-                # For regular integer columns, use a safe range
-                return random.randint(1000, 999999)
+                # For regular integer columns, use counter
+                return 100000 + current_counter
         
         elif column_info.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
-            # For string columns, use UUID or timestamp-based unique string
+            # For string columns, incorporate the counter for guaranteed uniqueness
             if column_info.max_length and column_info.max_length < 36:
-                # Short string - use compact unique identifier
-                suffix = random.randint(1000, 9999)
-                timestamp_short = int(time.time()) % 100000  # Last 5 digits of timestamp
-                unique_str = f"u{timestamp_short}_{suffix}"
+                # Short string - use counter-based unique identifier
+                unique_str = f"u{current_counter}"
                 max_len = column_info.max_length or 50
                 return unique_str[:max_len]
             else:
-                # Long string - use UUID
-                return str(uuid.uuid4())
+                # Long string - use UUID with counter suffix for extra uniqueness
+                uuid_base = str(uuid.uuid4())
+                if len(uuid_base) + len(str(current_counter)) + 1 <= (column_info.max_length or 255):
+                    return f"{uuid_base}-{current_counter}"
+                else:
+                    return uuid_base
         
         elif column_info.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
-            # For float columns, use reasonable range
-            return random.uniform(1.0, 999999.99)
+            # For float columns, use counter with decimal precision
+            return 1000.0 + current_counter + (current_counter % 100) / 100.0
         
         else:
-            # Fallback - use compact unique identifier
-            timestamp_short = int(time.time()) % 100000
-            return f"unique_{timestamp_short}_{random.randint(1000, 9999)}"
+            # Fallback - use counter-based unique identifier
+            return f"unique_{current_counter}"
     
     def _generate_fallback_for_null_column(self, column: ColumnInfo) -> Any:
         """Generate a fallback value for NULL values in NOT NULL columns."""
@@ -463,6 +529,7 @@ class FastDataReuser:
         """Ultra-fast bulk insertion using multiple strategies."""
         logger.info(f"⚡ Using ultra-fast bulk insertion for {target_rows:,} rows")
         
+        start_time = time.time()  # Add start_time to this method scope
         data_pool = self.data_pools[table_name]
         batch_size = 50000  # Large batches for maximum speed
         total_inserted = 0
@@ -564,32 +631,122 @@ class FastDataReuser:
         all_data = []
         pool_size = len(data_pool.constraint_safe_data)
         
+        # Get constraints for this table to handle unique columns
+        constraints = self.constraint_analyzer.analyze_table_constraints(data_pool.table_name)
+        unique_columns = set(constraints.get('unique_columns', []))
+        
+        # Get table info for column details
+        table_info = None
+        for table in self.schema.tables:
+            if table.name == data_pool.table_name:
+                table_info = table
+                break
+        
         # Use numpy for ultra-fast random selection
         indices = np.random.randint(0, pool_size, size=target_rows)
         
         for i in indices:
             row_data = data_pool.constraint_safe_data[i].copy()
+            
+            # For unique columns, generate fresh unique values for each row
+            # For foreign key columns, get valid existing FK values
+            if table_info:
+                for column_info in table_info.columns:
+                    column_name = column_info.name
+                    # Priority: FK columns first (even if they're unique), then regular unique columns
+                    if column_name in constraints.get('foreign_keys', []):
+                        # For FK columns, get a valid existing FK value (this handles unique FK constraints properly)
+                        valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
+                        if valid_fk_value is not None:
+                            row_data[column_name] = valid_fk_value
+                    elif column_name in unique_columns:
+                        # Generate a fresh unique value for non-FK unique columns
+                        unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
+                        row_data[column_name] = unique_value
+            
             all_data.append(row_data)
         
         return all_data
     
     def _generate_reusable_batch(self, data_pool: ReusableDataPool, batch_size: int) -> List[Dict[str, Any]]:
-        """Generate a batch of reusable data."""
+        """Generate a batch of reusable data with fresh unique values for each row."""
         if not data_pool.constraint_safe_data:
             return []
         
         batch_data = []
         pool_size = len(data_pool.constraint_safe_data)
         
+        # Get constraints for this table
+        constraints = self.constraint_analyzer.analyze_table_constraints(data_pool.table_name)
+        unique_columns = set(constraints.get('unique_columns', []))
+        
+        # Get table info for column details
+        table_info = None
+        for table in self.schema.tables:
+            if table.name == data_pool.table_name:
+                table_info = table
+                break
+        
         for _ in range(batch_size):
-            # Randomly select a row from constraint-safe data
+            # Randomly select a row from constraint-safe data as template
             source_row = random.choice(data_pool.constraint_safe_data)
-            batch_data.append(source_row.copy())
+            new_row = source_row.copy()
+            
+            # For unique columns, generate fresh unique values for each row
+            # For foreign key columns, get valid existing FK values  
+            if table_info:
+                for column_info in table_info.columns:
+                    column_name = column_info.name
+                    # Priority: FK columns first (even if they're unique), then regular unique columns
+                    if column_name in constraints.get('foreign_keys', []):
+                        # For FK columns, get a valid existing FK value (this handles unique FK constraints properly)
+                        logger.debug(f"Processing FK column {column_name}, getting valid FK value...")
+                        valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
+                        if valid_fk_value is not None:
+                            new_row[column_name] = valid_fk_value
+                            logger.debug(f"Replaced FK value for {column_name}: {valid_fk_value}")
+                        else:
+                            logger.warning(f"Could not get valid FK value for {column_name}, keeping original")
+                    elif column_name in unique_columns:
+                        # Generate a fresh unique value for non-FK unique columns
+                        unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
+                        new_row[column_name] = unique_value
+                        logger.debug(f"Generated unique value for {column_name}: {unique_value}")
+            
+            batch_data.append(new_row)
         
         return batch_data
     
     def _insert_batch_ultra_fast(self, table_name: str, batch_data: List[Dict[str, Any]]) -> int:
-        """Insert a batch with ultra-fast optimizations."""
+        """Insert a batch with ultra-fast optimizations and improved error handling."""
+        if not batch_data:
+            return 0
+        
+        # For very large batches, split them to reduce constraint collision risk
+        max_batch_size = 10000  # Smaller batches for better constraint handling
+        if len(batch_data) > max_batch_size:
+            total_inserted = 0
+            for i in range(0, len(batch_data), max_batch_size):
+                chunk = batch_data[i:i + max_batch_size]
+                try:
+                    inserted = self._insert_single_chunk_ultra_fast(table_name, chunk)
+                    total_inserted += inserted
+                except Exception as e:
+                    logger.warning(f"Chunk insertion failed, falling back to individual inserts: {e}")
+                    # Try individual inserts for this chunk to identify problem records
+                    for row in chunk:
+                        try:
+                            individual_inserted = self._insert_single_chunk_ultra_fast(table_name, [row])
+                            total_inserted += individual_inserted
+                        except Exception as row_error:
+                            logger.debug(f"Skipping problematic row: {row_error}")
+                            continue
+            return total_inserted
+        else:
+            return self._insert_single_chunk_ultra_fast(table_name, batch_data)
+    
+    def _insert_single_chunk_ultra_fast(self, table_name: str, batch_data: List[Dict[str, Any]]) -> int:
+        """Insert a single chunk with ultra-fast optimizations."""
         if not batch_data:
             return 0
         
@@ -623,7 +780,7 @@ class FastDataReuser:
                 return len(batch_data)
         
         except Exception as e:
-            logger.error(f"Ultra-fast batch insert failed: {e}")
+            logger.error(f"Ultra-fast chunk insert failed: {e}")
             raise
     
     def _insert_batch_fast(self, table_name: str, batch_data: List[Dict[str, Any]]) -> int:
