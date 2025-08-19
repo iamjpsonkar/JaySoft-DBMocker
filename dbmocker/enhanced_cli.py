@@ -18,8 +18,8 @@ from .core.enhanced_models import (
     EnhancedGenerationConfig, PerformanceMode, DuplicateStrategy,
     create_high_performance_config, create_bulk_generation_request
 )
+from .core.ultra_fast_processor import UltraFastProcessor
 from .core.high_performance_generator import HighPerformanceGenerator
-from .core.ultra_fast_processor import UltraFastProcessor, create_ultra_fast_processor
 
 
 # Configure logging
@@ -220,7 +220,7 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
             
             if use_ultra_fast:
                 click.echo("⚡ Using Ultra-Fast Processor for maximum performance")
-                processor = create_ultra_fast_processor(schema, config, db_conn)
+                processor = UltraFastProcessor(schema, config, db_conn)
                 
                 # Process each table
                 for table_name, row_count in target_tables.items():
@@ -266,7 +266,7 @@ def generate(ctx, host, port, database, username, password, driver, table, rows,
     
     except Exception as e:
         click.echo(f"❌ Error: {e}", err=True)
-        if ctx.obj.get('verbose'):
+        if ctx.obj and ctx.obj.get('verbose'):
             import traceback
             traceback.print_exc()
         sys.exit(1)

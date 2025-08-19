@@ -6,6 +6,9 @@ from typing import List, Dict, Any, Optional, Union, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 from pydantic import BaseModel, Field, validator
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PerformanceMode(Enum):
@@ -416,6 +419,28 @@ def create_high_performance_config(
         generation_mode="ultra_high_performance" if performance_mode == PerformanceMode.ULTRA_HIGH else "bulk",
         **kwargs
     )
+    
+    # ADAPTIVE BATCH SIZING: Adjust batch size based on target row count
+    if target_tables:
+        max_rows_for_any_table = max(target_tables.values()) if target_tables.values() else 0
+        if max_rows_for_any_table > 0:
+            # For small datasets, use smaller batch sizes to avoid over-generation
+            # Batch size should not exceed the target row count for any table
+            adaptive_batch_size = min(config.batch_size, max_rows_for_any_table, 10000)
+            
+            # For very small datasets, use even smaller batches
+            if max_rows_for_any_table <= 10:
+                adaptive_batch_size = min(adaptive_batch_size, max_rows_for_any_table)
+            elif max_rows_for_any_table <= 100:
+                adaptive_batch_size = min(adaptive_batch_size, 100)
+            elif max_rows_for_any_table <= 1000:
+                adaptive_batch_size = min(adaptive_batch_size, 1000)
+            
+            if adaptive_batch_size != config.batch_size:
+                logger.info(f"🔧 Adaptive batch sizing: {config.batch_size} → {adaptive_batch_size} (max table rows: {max_rows_for_any_table})")
+                config.batch_size = adaptive_batch_size
+                # CRITICAL: Also update performance.batch_size to ensure consistency
+                config.performance.batch_size = adaptive_batch_size
     
     return config
 

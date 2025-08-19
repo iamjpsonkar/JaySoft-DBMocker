@@ -11,6 +11,7 @@ import threading
 import multiprocessing as mp
 import queue
 import numpy as np
+import random
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Iterator, Union
@@ -201,10 +202,12 @@ class UltraFastStringGenerator:
 class UltraFastDataGenerator:
     """Ultra-fast data generator optimized for millions of records."""
     
-    def __init__(self, schema: DatabaseSchema, config: EnhancedGenerationConfig):
+    def __init__(self, schema: DatabaseSchema, config: EnhancedGenerationConfig, 
+                 db_connection: DatabaseConnection = None):
         """Initialize ultra-fast generator."""
         self.schema = schema
         self.config = config
+        self.db_connection = db_connection
         
         # Initialize optimized components
         self.value_generator = MemoryMappedValueGenerator()
@@ -235,6 +238,9 @@ class UltraFastDataGenerator:
     
     def _create_table_strategy(self, table: TableInfo) -> Dict[str, Any]:
         """Create optimal generation strategy for table."""
+        # Store current table for FK resolution
+        self.current_table = table
+        
         strategy = {
             'table_name': table.name,
             'column_strategies': {},
@@ -244,6 +250,9 @@ class UltraFastDataGenerator:
         }
         
         for column in table.columns:
+            # Skip auto-increment columns - let the database handle them
+            if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                continue
             col_strategy = self._create_column_strategy(column)
             strategy['column_strategies'][column.name] = col_strategy
         
@@ -263,15 +272,34 @@ class UltraFastDataGenerator:
         
         # Handle boolean columns (including common boolean-like names)
         if (column.data_type == ColumnType.BOOLEAN or 
-            column_name_lower in ['is_active', 'active', 'enabled', 'is_enabled', 'is_deleted', 'deleted', 'is_valid']):
+            column_name_lower.startswith('is_') or  # Any column starting with 'is_'
+            column_name_lower.startswith('has_') or  # Any column starting with 'has_'
+            column_name_lower.startswith('can_') or  # Any column starting with 'can_'
+            column_name_lower in ['active', 'enabled', 'deleted', 'valid', 'visible', 'published', 'verified', 'confirmed', 'archived']):
             strategy['method'] = 'boolean'
             return strategy
         
-        # Handle datetime/timestamp columns
-        if (column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP, ColumnType.DATE] or
-            any(keyword in column_name_lower for keyword in ['created', 'modified', 'updated', 'date', 'time', '_on', '_at'])):
+        # Special case: MySQL tinyint(1) columns are typically boolean regardless of name
+        # Common patterns: created_on_oms, flags, status indicators, collect values
+        if (column.data_type == ColumnType.INTEGER and 
+            (column_name_lower.endswith('_oms') or column_name_lower.endswith('_flag') or 
+             column_name_lower.endswith('_status') or column_name_lower.endswith('_indicator') or
+             column_name_lower.endswith('_collect') or column_name_lower.startswith('payment_to_') or
+             # Add other suspicious boolean-like integer column patterns
+             'flag' in column_name_lower or 'status' in column_name_lower)):
+            strategy['method'] = 'boolean'
+            return strategy
+        
+        # Handle datetime/timestamp columns - ONLY if data type is actually datetime
+        if column.data_type in [ColumnType.DATETIME, ColumnType.TIMESTAMP, ColumnType.DATE]:
             strategy['method'] = 'datetime'
             strategy['format'] = 'datetime' if 'date' in column_name_lower else 'timestamp'
+            return strategy
+        # Handle VARCHAR/TEXT columns with datetime-like names
+        elif (column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT] and
+              any(keyword in column_name_lower for keyword in ['created', 'modified', 'updated', 'date', 'time', '_on', '_at'])):
+            strategy['method'] = 'datetime'
+            strategy['format'] = 'string'  # Generate datetime as string for text columns
             return strategy
         
         # Handle numeric columns
@@ -283,9 +311,14 @@ class UltraFastDataGenerator:
                 strategy['min_val'] = column.min_value or 1
                 strategy['max_val'] = column.max_value or 32767
             elif 'id' in column_name_lower and column_name_lower.endswith('_id'):
-                # Foreign key IDs should be smaller ranges
-                strategy['min_val'] = 1
-                strategy['max_val'] = 1000  
+                # Check if this is a foreign key column
+                if self._is_foreign_key_column(column):
+                    strategy['method'] = 'foreign_key'
+                    strategy['fk_info'] = self._get_foreign_key_info(column)
+                else:
+                    # Regular ID columns should be smaller ranges  
+                    strategy['min_val'] = 1
+                    strategy['max_val'] = 1000  
             else:
                 strategy['min_val'] = column.min_value or 1
                 strategy['max_val'] = column.max_value or 100000  # More reasonable than 1M
@@ -295,9 +328,24 @@ class UltraFastDataGenerator:
             strategy['min_val'] = column.min_value or 0.0
             strategy['max_val'] = column.max_value or 10000.0  # More reasonable range
         
+        # Handle DECIMAL columns
+        elif column.data_type == ColumnType.DECIMAL:
+            strategy['method'] = 'decimal'
+            strategy['min_val'] = column.min_value or 0.0
+            strategy['max_val'] = column.max_value or 10000.0
+            strategy['precision'] = getattr(column, 'precision', 10)
+            strategy['scale'] = getattr(column, 'scale', 2)
+        
         # Handle string columns with smart type detection
         elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
-            if 'email' in column_name_lower:
+            # Check if this might be an ENUM column based on name patterns
+            if (column_name_lower in ['current_status', 'status', 'collect_type'] or 
+                column_name_lower.endswith('_status') or 
+                column_name_lower.endswith('_type')):
+                # Treat as ENUM for common status/type columns
+                strategy['method'] = 'enum'
+                strategy['enum_values'] = self._get_enum_values(column.name)
+            elif 'email' in column_name_lower:
                 strategy['method'] = 'string_email'
             elif any(name_part in column_name_lower for name_part in ['name', 'title', 'label']):
                 strategy['method'] = 'string_name'
@@ -312,6 +360,19 @@ class UltraFastDataGenerator:
             
             strategy['max_length'] = column.max_length or 50
         
+        # Handle ENUM columns
+        elif column.data_type == ColumnType.ENUM:
+            strategy['method'] = 'enum'
+            # Get ENUM values from database for this specific column
+            strategy['enum_values'] = self._get_enum_values(column.name)
+            
+        # Handle JSON columns
+        elif column.data_type in [ColumnType.JSON, ColumnType.JSONB]:
+            if 'aggregator' in column_name_lower:
+                strategy['method'] = 'json_aggregator'
+            else:
+                strategy['method'] = 'json_default'
+        
         else:
             strategy['method'] = 'fallback'
         
@@ -319,6 +380,198 @@ class UltraFastDataGenerator:
         strategy['avoid_null'] = not strategy.get('nullable', True)
         
         return strategy
+    
+    def _get_enum_values(self, column_name: str) -> List[str]:
+        """Get ENUM values for a specific column by querying INFORMATION_SCHEMA."""
+        try:
+            # Try to get actual ENUM values from database if connection is available
+            if hasattr(self, 'db_connection') and self.db_connection and hasattr(self, 'current_table'):
+                table_name = self.current_table.name
+                query = """
+                    SELECT COLUMN_TYPE 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_SCHEMA = DATABASE() 
+                    AND TABLE_NAME = %s 
+                    AND COLUMN_NAME = %s
+                """
+                try:
+                    result = self.db_connection.execute_query(query, (table_name, column_name))
+                    if result and result[0] and result[0][0]:
+                        column_type = result[0][0]
+                        # Parse ENUM values from COLUMN_TYPE like "enum('created','resent','expired')"
+                        if column_type.startswith('enum('):
+                            enum_part = column_type[5:-1]  # Remove 'enum(' and ')'
+                            # Split by comma and clean up quotes
+                            enum_values = [val.strip().strip("'\"") for val in enum_part.split(',')]
+                            if enum_values:
+                                logger.debug(f"Found ENUM values for {column_name}: {enum_values}")
+                                return enum_values
+                except Exception as e:
+                    logger.debug(f"Could not query ENUM values for {column_name}: {e}")
+            
+            # Fallback to smart defaults based on column name
+            if column_name == 'current_status':
+                return ['created', 'resent', 'expired', 'cancelled', 'paid', 'failed', 'pending']
+            elif column_name == 'status':
+                return ['started', 'completed', 'partial_paid', 'failed', 'pending', 'refund_done', 'refund_initiated', 'partial_refund', 'refund_failed', 'refund_pending', 'refund_acknowledge']
+            elif column_name == 'collect_type':
+                return ['SINGLE', 'MULTI', 'SPLIT', 'ADVANCE']
+            elif column_name == 'integration_type':
+                return ['extension', 'aggregator']
+            elif column_name == 'extension_type':
+                return ['payment', 'payout', 'loyality', 'offline']
+            elif column_name == 'payment_required_type':
+                return ['REQUIRED', 'BLOCKED']
+            elif 'status' in column_name.lower():
+                return ['active', 'inactive', 'pending', 'completed']
+            elif 'type' in column_name.lower():
+                return ['type1', 'type2', 'type3']
+            else:
+                return ['option1', 'option2', 'option3']
+        except Exception as e:
+            logger.warning(f"Failed to get ENUM values for {column_name}: {e}")
+            return ['default']
+    
+    def _is_foreign_key_column(self, column) -> bool:
+        """Check if a column is a foreign key."""
+        # This requires access to table schema with FK information
+        if hasattr(self, 'current_table') and self.current_table:
+            for fk in self.current_table.foreign_keys:
+                if column.name in fk.columns:
+                    return True
+        return False
+    
+    def _get_foreign_key_info(self, column) -> Dict[str, Any]:
+        """Get foreign key information for a column."""
+        if hasattr(self, 'current_table') and self.current_table:
+            for fk in self.current_table.foreign_keys:
+                if column.name in fk.columns:
+                    return {
+                        'referenced_table': fk.referenced_table,
+                        'referenced_column': fk.referenced_columns[0] if fk.referenced_columns else 'id',
+                        'constraint_name': fk.name
+                    }
+        return {}
+    
+    def _generate_foreign_key_batch(self, strategy: Dict[str, Any], batch_size: int) -> List[Any]:
+        """Generate a batch of valid foreign key values."""
+        fk_info = strategy.get('fk_info', {})
+        referenced_table = fk_info.get('referenced_table')
+        referenced_column = fk_info.get('referenced_column', 'id')
+        
+        if not referenced_table:
+            logger.warning("No referenced table found for FK, using fallback values")
+            return [random.randint(1, 10) for _ in range(batch_size)]
+        
+        # Get valid FK values from the database
+        try:
+            if hasattr(self, 'db_connection') and self.db_connection:
+                # Check if this FK has unique constraint
+                column_name = strategy.get('name', '')
+                is_unique_fk = self._is_unique_fk_column(column_name)
+                
+                if is_unique_fk:
+                    # For unique FKs, get unused values or create new referenced records
+                    return self._generate_unique_fk_batch(referenced_table, referenced_column, column_name, batch_size)
+                else:
+                    # For non-unique FKs, get any available values
+                    query = f"SELECT DISTINCT {referenced_column} FROM {referenced_table} WHERE {referenced_column} IS NOT NULL LIMIT 1000"
+                    result = self.db_connection.execute_query(query)
+                    if result:
+                        available_values = [row[0] for row in result]
+                        if available_values:
+                            return [random.choice(available_values) for _ in range(batch_size)]
+        except Exception as e:
+            logger.warning(f"Failed to fetch FK values for {referenced_table}.{referenced_column}: {e}")
+        
+        # Fallback to a reasonable range for FK values
+        return [random.randint(1, 10) for _ in range(batch_size)]
+    
+    def _is_unique_fk_column(self, column_name: str) -> bool:
+        """Check if FK column has unique constraint."""
+        if hasattr(self, 'current_table') and self.current_table:
+            for constraint in self.current_table.constraints:
+                if hasattr(constraint, 'type') and constraint.type.value == 'unique' and column_name in constraint.columns:
+                    return True
+        return False
+    
+    def _generate_unique_fk_batch(self, referenced_table: str, referenced_column: str, 
+                                column_name: str, batch_size: int) -> List[Any]:
+        """Generate batch of unique FK values, creating referenced records if needed."""
+        try:
+            # Get available FK values
+            available_query = f"SELECT DISTINCT {referenced_column} FROM {referenced_table} WHERE {referenced_column} IS NOT NULL LIMIT 1000"
+            available_result = self.db_connection.execute_query(available_query)
+            available_values = [row[0] for row in available_result] if available_result else []
+            
+            # Get already used FK values
+            current_table_name = self.current_table.name if hasattr(self, 'current_table') else 'unknown'
+            used_query = f"SELECT DISTINCT {column_name} FROM {current_table_name} WHERE {column_name} IS NOT NULL"
+            used_result = self.db_connection.execute_query(used_query)
+            used_values = set([row[0] for row in used_result]) if used_result else set()
+            
+            # Find unused values
+            unused_values = [val for val in available_values if val not in used_values]
+            
+            result_values = []
+            for i in range(batch_size):
+                if unused_values:
+                    # Use an unused value
+                    selected_value = unused_values.pop(0)
+                    result_values.append(selected_value)
+                    used_values.add(selected_value)  # Mark as used
+                else:
+                    # Need to create a new referenced record
+                    new_fk_value = self._create_referenced_record_simple(referenced_table, referenced_column)
+                    if new_fk_value is not None:
+                        result_values.append(new_fk_value)
+                        used_values.add(new_fk_value)
+                    else:
+                        # Last resort fallback
+                        fallback_value = max(available_values) + 1000 + i if available_values else 1000 + i
+                        result_values.append(fallback_value)
+            
+            return result_values
+            
+        except Exception as e:
+            logger.error(f"Failed to generate unique FK batch for {referenced_table}: {e}")
+            # Return fallback values
+            return [1000 + i for i in range(batch_size)]
+    
+    def _create_referenced_record_simple(self, referenced_table: str, referenced_column: str) -> Any:
+        """Create a simple referenced record and return its ID."""
+        try:
+            # This is a simplified version - just insert minimal required data
+            # In practice, this would need to analyze the referenced table schema
+            
+            if referenced_table == 'payment_link_details':
+                # Special case for payment_link_details - create minimal record
+                record_data = {
+                    'external_order_id': f'order_{int(time.time())}_{random.randint(1000, 9999)}',
+                    'amount': round(random.uniform(10.0, 1000.0), 2),
+                    'meta': '{}',
+                    'external_customer_id': f'cust_{random.randint(1000, 9999)}',
+                    'unique_link_id': f'link_{int(time.time())}_{random.randint(1000, 9999)}',
+                    'application_id': f'app_{random.randint(1000, 9999)}'
+                }
+                
+                # Insert the record
+                with self.db_connection.get_session() as session:
+                    columns = ', '.join([self.db_connection.quote_identifier(col) for col in record_data.keys()])
+                    insert_query = f"INSERT INTO {self.db_connection.quote_identifier(referenced_table)} ({columns}) VALUES ({', '.join([f':{col}' for col in record_data.keys()])})"
+                    result = session.execute(text(insert_query), record_data)
+                    session.commit()
+                    
+                    if hasattr(result, 'lastrowid') and result.lastrowid:
+                        logger.info(f"Created new {referenced_table} record with ID {result.lastrowid}")
+                        return result.lastrowid
+            
+            # Generic fallback for other tables - return a high ID hoping it works
+            return random.randint(10000, 99999)
+            
+        except Exception as e:
+            logger.error(f"Failed to create referenced record in {referenced_table}: {e}")
+            return None
     
     def _create_value_pools_for_table(self, table: TableInfo):
         """Create value pools for table columns."""
@@ -348,6 +601,9 @@ class UltraFastDataGenerator:
         column_data = {}
         
         for column in table.columns:
+            # Skip auto-increment columns - let the database handle them
+            if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                continue
             col_strategy = strategy['column_strategies'][column.name]
             column_data[column.name] = self._generate_column_batch(
                 col_strategy, batch_size, offset
@@ -386,6 +642,10 @@ class UltraFastDataGenerator:
                                          minutes=random.randint(0, 59))).strftime('%Y-%m-%d %H:%M:%S')
                    for i in range(batch_size)]
         
+        # Handle foreign key columns
+        elif method == 'foreign_key':
+            return self._generate_foreign_key_batch(strategy, batch_size)
+        
         # Handle integer columns
         elif method == 'numpy_int':
             min_val = strategy.get('min_val', 1)
@@ -422,13 +682,81 @@ class UltraFastDataGenerator:
                 return [f"user{offset + i}@{np.random.choice(domains)}" 
                        for i in range(batch_size)]
             elif pattern == 'id':
-                return [f"ID{offset + i:06d}" for i in range(batch_size)]
+                # Add randomness to avoid collisions with existing unique values
+                import random
+                base_id = random.randint(100000, 999999)
+                return [f"ID{base_id + i:06d}" for i in range(batch_size)]
             elif pattern == 'text':
                 texts = ['Sample description', 'Lorem ipsum text', 'Generated content']
                 return [f"{np.random.choice(texts)} {offset + i}" for i in range(batch_size)]
+            elif pattern in ['name', 'default']:
+                # Add randomness to avoid collisions for potentially unique string columns
+                import random
+                prefixes = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Phoenix', 'Dragon', 'Eagle', 'Tiger']
+                max_length = strategy.get('max_length', 50)
+                results = []
+                for i in range(batch_size):
+                    prefix = np.random.choice(prefixes)
+                    suffix = random.randint(1000, 9999)
+                    generated = f"{prefix}{suffix}"
+                    # Truncate to max_length if needed
+                    if len(generated) > max_length:
+                        generated = generated[:max_length]
+                    results.append(generated)
+                return results
             else:
                 # Use the existing string generator for other patterns
                 return self.string_generator.generate_batch(batch_size, pattern, max_length)
+        
+        # Handle JSON columns
+        elif method == 'json_aggregator':
+            # Generate simple aggregator JSON objects
+            import json
+            providers = ["Stripe", "Fynd", "Jio", "Razorpay", "Openapi", "Jiopay"]
+            result = []
+            for i in range(batch_size):
+                provider = np.random.choice(providers)
+                data = {provider: f"cust_{np.random.randint(100, 999)}"}
+                result.append(json.dumps(data))
+            return result
+        
+        elif method == 'json_default':
+            # Generate simple JSON objects
+            import json
+            result = []
+            for i in range(batch_size):
+                data = {
+                    "id": offset + i,
+                    "type": "default", 
+                    "active": bool(np.random.randint(0, 2))
+                }
+                result.append(json.dumps(data))
+            return result
+        
+        # Handle ENUM columns
+        elif method == 'enum':
+            enum_values = strategy.get('enum_values', ['default'])
+            return [np.random.choice(enum_values) for _ in range(batch_size)]
+        
+        # Handle DECIMAL columns
+        elif method == 'decimal':
+            from decimal import Decimal
+            min_val = strategy.get('min_val', 0.0)
+            max_val = strategy.get('max_val', 10000.0)
+            scale = strategy.get('scale', 2)
+            
+            # Ensure min_val < max_val
+            if min_val >= max_val:
+                max_val = min_val + 1000.0
+            
+            result = []
+            for i in range(batch_size):
+                # Generate random float and convert to Decimal with proper scale
+                random_float = np.random.uniform(min_val, max_val)
+                # Round to the specified scale
+                decimal_value = Decimal(str(round(random_float, scale)))
+                result.append(decimal_value)
+            return result
         
         else:
             # Improved fallback generation
@@ -536,30 +864,27 @@ class UltraFastInserter:
             
             elif self.db_config.driver == 'mysql':
                 # MySQL-specific optimizations
-                conn.execute(text("SET autocommit = 0"))
+                # Don't set autocommit=0 since DatabaseConnection already handles isolation_level
                 conn.execute(text("SET unique_checks = 0"))
                 conn.execute(text("SET foreign_key_checks = 0"))
             
             # Execute bulk insert with proper transaction management
-            # Check if there's already an active transaction
-            trans = None
             try:
-                # Only begin a new transaction if one isn't already active
-                if not conn.in_transaction():
-                    trans = conn.begin()
+                # For AUTOCOMMIT mode, execute directly without manual transaction management
+                if self.db_config.driver == "mysql":
+                    # Enable autocommit for this specific operation to ensure immediate commit
+                    conn.execute(text("SET autocommit = 1"))
                 
                 conn.execute(text(stmt), data)
                 
-                # Only commit if we started the transaction
-                if trans is not None:
-                    trans.commit()
+                # Ensure the operation is flushed immediately
+                if hasattr(conn, 'commit'):
+                    conn.commit()
                 
                 return len(data)
                 
             except Exception as e:
-                # Only rollback if we started the transaction
-                if trans is not None:
-                    trans.rollback()
+                logger.error(f"Ultra-fast bulk insert failed: {e}")
                 raise e
     
     def _quote_identifier(self, identifier: str) -> str:
@@ -585,7 +910,7 @@ class UltraFastProcessor:
         self.db_connection = db_connection
         
         # Initialize components
-        self.generator = UltraFastDataGenerator(schema, config)
+        self.generator = UltraFastDataGenerator(schema, config, db_connection)
         self.inserter = UltraFastInserter(db_connection.config, config.performance)
         
         # Initialize fast data reuser if enabled

@@ -301,12 +301,20 @@ class FastDataReuser:
                 table_info = table
                 break
         
-        # Forbidden columns that should never be included
-        forbidden_columns = (
-            set(constraints.get('auto_increment_columns', [])) |
-            set(constraints.get('primary_keys', [])) |
-            set(constraints.get('unique_columns', []))
-        )
+        # Forbidden columns that should never be included (only auto-increment)
+        # Unique columns will be handled separately with generated unique values
+        forbidden_columns = set(constraints.get('auto_increment_columns', []))
+        
+        # Only exclude primary keys if they are also auto-increment
+        auto_increment_pks = set()
+        for pk in constraints.get('primary_keys', []):
+            if pk in constraints.get('auto_increment_columns', []):
+                auto_increment_pks.add(pk)
+        
+        forbidden_columns.update(auto_increment_pks)
+        
+        logger.debug(f"Fast data reuse forbidden columns for {data_pool.table_name}: {forbidden_columns}")
+        logger.debug(f"Fast data reuse unique columns (will generate unique values): {constraints.get('unique_columns', [])}")
         
         for row in data_pool.sampled_data:
             safe_row = {}
@@ -316,8 +324,15 @@ class FastDataReuser:
                 for column_info in table_info.columns:
                     column_name = column_info.name
                     
-                    # Skip forbidden columns
-                    if column_name in forbidden_columns:
+                    # Skip only auto-increment columns
+                    if column_name in constraints.get('auto_increment_columns', []):
+                        continue
+                    
+                    # For unique columns, generate unique values instead of reusing
+                    if column_name in constraints.get('unique_columns', []):
+                        unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
+                        safe_row[column_name] = unique_value
+                        logger.debug(f"Generated unique value for unique column {column_name}: {unique_value}")
                         continue
                     
                     # Get value from sampled row or generate fallback
@@ -325,20 +340,22 @@ class FastDataReuser:
                         value = row[column_name]
                         if value is not None:
                             safe_row[column_name] = value
-                        elif not column_info.is_nullable:
-                            # Generate fallback for NOT NULL columns with NULL values
+                        else:
+                            # Generate fallback for ALL columns with NULL values (avoid NULLs completely)
                             fallback_value = self._generate_fallback_for_null_column(column_info)
                             safe_row[column_name] = fallback_value
-                            logger.debug(f"Generated fallback for NULL NOT NULL column {column_name}: {fallback_value}")
-                        # Skip NULL values for nullable columns
+                            if not column_info.is_nullable:
+                                logger.debug(f"Generated fallback for NULL NOT NULL column {column_name}: {fallback_value}")
+                            else:
+                                logger.debug(f"Generated fallback for NULL nullable column {column_name} to avoid NULLs: {fallback_value}")
                     else:
-                        # Column missing entirely from sampled data
+                        # Column missing entirely from sampled data - generate value for ALL columns (avoid NULLs completely)
+                        fallback_value = self._generate_fallback_for_null_column(column_info)
+                        safe_row[column_name] = fallback_value
                         if not column_info.is_nullable:
-                            # Generate value for missing NOT NULL columns
-                            fallback_value = self._generate_fallback_for_null_column(column_info)
-                            safe_row[column_name] = fallback_value
                             logger.info(f"Generated value for missing NOT NULL column {column_name}: {fallback_value}")
-                        # Don't add anything for missing nullable columns
+                        else:
+                            logger.debug(f"Generated value for missing nullable column {column_name} to avoid NULLs: {fallback_value}")
             else:
                 # Fallback to original logic if no table info
                 for column_name, value in row.items():
@@ -349,6 +366,46 @@ class FastDataReuser:
                 constraint_safe_data.append(safe_row)
         
         return constraint_safe_data
+    
+    def _generate_unique_value_for_column(self, column_info: ColumnInfo, table_name: str) -> Any:
+        """Generate a unique value for a column to avoid constraint violations."""
+        import uuid
+        import random
+        import time
+        
+        if column_info.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
+            # For integer columns, use a safer range to avoid overflow
+            # Check if this is a foreign key column that needs special handling
+            column_name = column_info.name.lower()
+            if 'id' in column_name and column_name.endswith('_id'):
+                # For FK columns, use a modest range that won't exceed INT limits
+                base = random.randint(10000, 50000)
+                return base + random.randint(1, 999)
+            else:
+                # For regular integer columns, use a safe range
+                return random.randint(1000, 999999)
+        
+        elif column_info.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
+            # For string columns, use UUID or timestamp-based unique string
+            if column_info.max_length and column_info.max_length < 36:
+                # Short string - use compact unique identifier
+                suffix = random.randint(1000, 9999)
+                timestamp_short = int(time.time()) % 100000  # Last 5 digits of timestamp
+                unique_str = f"u{timestamp_short}_{suffix}"
+                max_len = column_info.max_length or 50
+                return unique_str[:max_len]
+            else:
+                # Long string - use UUID
+                return str(uuid.uuid4())
+        
+        elif column_info.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
+            # For float columns, use reasonable range
+            return random.uniform(1.0, 999999.99)
+        
+        else:
+            # Fallback - use compact unique identifier
+            timestamp_short = int(time.time()) % 100000
+            return f"unique_{timestamp_short}_{random.randint(1000, 9999)}"
     
     def _generate_fallback_for_null_column(self, column: ColumnInfo) -> Any:
         """Generate a fallback value for NULL values in NOT NULL columns."""

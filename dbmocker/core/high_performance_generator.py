@@ -246,13 +246,15 @@ class StreamingDataGenerator:
     """Memory-efficient streaming data generator for very large datasets."""
     
     def __init__(self, schema: DatabaseSchema, config: GenerationConfig, 
-                 connection_pool: ConnectionPool, cache: IntelligentCache):
+                 connection_pool: ConnectionPool, cache: IntelligentCache, db_connection: DatabaseConnection):
         """Initialize streaming generator."""
         self.schema = schema
         self.config = config
         self.connection_pool = connection_pool
         self.cache = cache
-        self.base_generator = DataGenerator(schema, config, None)
+        # Use enhanced generator with database connection for proper FK generation
+        from .parallel_generator import EnhancedDataGenerator
+        self.base_generator = EnhancedDataGenerator(schema, config, db_connection)
     
     def generate_streaming_data(self, table_name: str, total_rows: int, 
                               chunk_size: int = 50000) -> Iterator[List[Dict[str, Any]]]:
@@ -324,6 +326,10 @@ class StreamingDataGenerator:
         table_config = self.config.table_configs.get(table.name, TableGenerationConfig())
         
         for column in table.columns:
+            # Skip auto-increment columns - let the database handle them
+            if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                continue
+                
             col_config = table_config.column_configs.get(column.name, ColumnGenerationConfig())
             
             template['columns'][column.name] = {
@@ -394,7 +400,7 @@ class HighPerformanceGenerator:
         # Performance components
         self.connection_pool = ConnectionPool(db_connection.config, pool_size=20, max_overflow=10)
         self.cache = IntelligentCache(max_cache_size_mb=1000)  # 1GB cache
-        self.streaming_generator = StreamingDataGenerator(schema, config, self.connection_pool, self.cache)
+        self.streaming_generator = StreamingDataGenerator(schema, config, self.connection_pool, self.cache, db_connection)
         
         # Performance tracking
         self.metrics = PerformanceMetrics()
@@ -602,11 +608,20 @@ class HighPerformanceGenerator:
     def _create_parallel_tasks(self, table_name: str, total_rows: int) -> List[BulkGenerationTask]:
         """Create parallel generation tasks."""
         tasks = []
-        rows_per_task = max(1000, total_rows // self.optimal_threads)
+        # CRITICAL FIX: Don't force minimum 1000 rows per task if total_rows is small
+        if total_rows <= 100:
+            # For small datasets, use single task to avoid over-generation
+            rows_per_task = total_rows
+            effective_threads = 1
+        else:
+            # For larger datasets, use parallel approach
+            effective_threads = min(self.optimal_threads, total_rows // 100)  # At least 100 rows per thread
+            effective_threads = max(1, effective_threads)  # Ensure at least 1 thread
+            rows_per_task = max(1, total_rows // effective_threads)
         
-        for i in range(self.optimal_threads):
+        for i in range(effective_threads):
             start_row = i * rows_per_task
-            if i == self.optimal_threads - 1:
+            if i == effective_threads - 1:
                 end_row = total_rows  # Last task gets remaining rows
             else:
                 end_row = start_row + rows_per_task
@@ -641,7 +656,7 @@ class HighPerformanceGenerator:
         
         # Use enhanced generator with better column name detection and constraint handling
         from .parallel_generator import EnhancedDataGenerator
-        generator = EnhancedDataGenerator(self.schema, thread_config, None)
+        generator = EnhancedDataGenerator(self.schema, thread_config, self.db_connection)
         
         # Generate data in batches
         total_inserted = 0

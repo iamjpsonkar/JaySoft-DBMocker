@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Any, List, Dict, Optional, Union, Callable, Set
 from faker import Faker
 import json
+from sqlalchemy import text
 
 from .models import (
     TableInfo, ColumnInfo, ConstraintInfo, DatabaseSchema,
@@ -77,6 +78,9 @@ class DataGenerator:
             return 1
         elif column.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
             return 1.0
+        elif column.data_type == ColumnType.DECIMAL:
+            from decimal import Decimal
+            return Decimal('1.00')
         elif column.data_type == ColumnType.BOOLEAN:
             return 0
         elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT, ColumnType.CHAR]:
@@ -96,9 +100,21 @@ class DataGenerator:
             return date.today()
         elif column.data_type == ColumnType.TIME:
             return datetime.now().time()
+        elif column.data_type == ColumnType.JSON:
+            return '{}'
+        elif column.data_type == ColumnType.ENUM:
+            if column.enum_values:
+                return column.enum_values[0]
+            else:
+                return 'default'
         else:
-            # Universal fallback
-            return f"fallback_value_{random.randint(1, 1000)}"
+            # Universal fallback - but be more type-aware
+            if 'amount' in column.name.lower() or 'price' in column.name.lower():
+                return 1.00
+            elif 'id' in column.name.lower():
+                return 1
+            else:
+                return f"fallback_value_{random.randint(1, 1000)}"
     
     def set_stop_flag(self, stop_flag):
         """Set the stop flag for halting generation."""
@@ -147,12 +163,20 @@ class DataGenerator:
         """Generate a single row of data for a table."""
         row = {}
         
-        # First pass: generate all columns (including FK columns with configuration)
+        # First pass: generate all columns EXCEPT auto-increment columns (including FK columns with configuration)
         for column in table.columns:
+            # Skip auto-increment columns - let the database handle them
+            if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                logger.debug(f"Skipping auto-increment column {column.name}")
+                continue
             row[column.name] = self._generate_column_value(column, table_config, table)
         
-        # Second pass: generate FK columns with proper references (but respect column configuration)
+        # Second pass: generate FK columns with proper references (but respect column configuration and skip auto-increment)
         for column in table.columns:
+            # Skip auto-increment columns in FK processing too
+            if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                continue
+                
             if self._is_foreign_key_column(table, column.name):
                 # Check if column has specific configuration - if so, respect it
                 column_config = table_config.column_configs.get(column.name)
@@ -295,9 +319,12 @@ class DataGenerator:
         logger.debug(f"Column {column.name} using constrained value generation")
         value = self._generate_constrained_value(column, column_config, table)
         
-        # FINAL SAFETY CHECK: Never return NULL for NOT NULL columns
-        if not column.is_nullable and value is None:
-            logger.warning(f"Generated NULL for NOT NULL column {column.name}, generating fallback value")
+        # FINAL SAFETY CHECK: Never return NULL for ANY columns (avoid NULL values completely)
+        if value is None:
+            if not column.is_nullable:
+                logger.warning(f"Generated NULL for NOT NULL column {column.name}, generating fallback value")
+            else:
+                logger.debug(f"Generated NULL for nullable column {column.name}, generating fallback value to avoid NULLs")
             value = self._generate_fallback_value_for_not_null_column(column)
         
         return value
@@ -495,6 +522,19 @@ class DataGenerator:
         else:
             min_length = 1
         
+        # CRITICAL: Apply specific constraints for known column types
+        column_name = column.name.lower()
+        if 'mobile' in column_name or 'phone' in column_name:
+            # Mobile numbers should be 10-15 chars max for DB compatibility
+            max_length = min(max_length, 15)
+            min_length = min(min_length, 10)
+        elif 'email' in column_name:
+            # Keep emails reasonable
+            max_length = min(max_length, 100)
+        elif column_name.endswith('_id') and any(word in column_name for word in ['user', 'merchant', 'aggregator']):
+            # User ID fields should be moderate
+            max_length = min(max_length, 50)
+        
         # Use average length from existing data if available
         if column.avg_length:
             target_length = min(int(column.avg_length), max_length)
@@ -591,7 +631,13 @@ class DataGenerator:
         column_name_lower = column.name.lower()
         
         # Generate context-aware JSON based on column name patterns
-        if any(pattern in column_name_lower for pattern in ['config', 'setting', 'preference']):
+        # CHECK AGGREGATOR FIRST before user/profile patterns
+        if 'aggregator' in column_name_lower:
+            # Special handling for aggregator_user_id columns
+            providers = ["Stripe", "Fynd", "Jio", "Razorpay", "Openapi", "Jiopay"]
+            selected_provider = random.choice(providers)
+            data = {selected_provider: f"cust_{random.randint(100, 999)}"}
+        elif any(pattern in column_name_lower for pattern in ['config', 'setting', 'preference']):
             data = self._generate_config_json()
         elif any(pattern in column_name_lower for pattern in ['meta', 'metadata', 'info']):
             data = self._generate_metadata_json()
@@ -606,7 +652,7 @@ class DataGenerator:
         elif any(pattern in column_name_lower for pattern in ['session', 'token', 'auth']):
             data = self._generate_session_json()
         else:
-            # Default generic JSON object
+            # Default simple JSON object  
             data = self._generate_generic_json()
         
         return json.dumps(data)
@@ -723,18 +769,18 @@ class DataGenerator:
         }
     
     def _generate_generic_json(self) -> Dict[str, Any]:
-        """Generate generic JSON object."""
+        """Generate simple, compact JSON object."""
+        # For aggregator_user_id type columns, generate simple provider mappings
+        if 'aggregator' in getattr(self, '_current_column_name', '').lower():
+            providers = ["Stripe", "Fynd", "Jio", "Razorpay", "Openapi", "Jiopay"]
+            selected_provider = random.choice(providers)
+            return {selected_provider: f"cust_{random.randint(100, 999)}"}
+        
+        # Generic simple JSON
         return {
             "id": random.randint(1, 1000),
-            "name": self.faker.name(),
-            "value": round(random.uniform(0, 100), 2),
-            "active": random.choice([True, False]),
-            "timestamp": datetime.now().isoformat(),
-            "data": {
-                "type": random.choice(["A", "B", "C"]),
-                "priority": random.randint(1, 10),
-                "notes": self.faker.sentence()
-            }
+            "type": random.choice(["A", "B", "C"]),
+            "active": random.choice([True, False])
         }
     
     def _generate_uuid(self, column: ColumnInfo, 
@@ -928,7 +974,8 @@ class DataGenerator:
         if 'email' in patterns:
             return self.faker.email()
         elif 'phone' in patterns:
-            return self.faker.phone_number()
+            # Generate simple numeric phone numbers to avoid length issues  
+            return ''.join([str(random.randint(0, 9)) for _ in range(10)])
         elif 'url' in patterns:
             return self.faker.url()
         elif 'uuid' in patterns:
@@ -1264,7 +1311,17 @@ class DataGenerator:
         ]):
             return random.choice([0, 1])
         
-        # Datetime/timestamp columns
+        # Special case: MySQL tinyint(1) columns are typically boolean regardless of name
+        # Common patterns: created_on_oms, flags, status indicators
+        if (column.data_type == ColumnType.INTEGER and 
+            (column_name.endswith('_oms') or column_name.endswith('_flag') or 
+             column_name.endswith('_status') or column_name.endswith('_indicator') or
+             # Add other suspicious boolean-like integer column patterns
+             'flag' in column_name or 'status' in column_name)):
+            logger.debug(f"Column {column_name} detected as boolean-like integer, generating 0/1")
+            return random.choice([0, 1])
+        
+        # Datetime/timestamp columns - ONLY for actual datetime data types
         if any(pattern in column_name for pattern in [
             'created', 'modified', 'updated', 'deleted', 'date', 'time', '_at', '_on'
         ]):
@@ -1275,9 +1332,10 @@ class DataGenerator:
                 return self.faker.date_between(start_date='-30y', end_date='today')
             elif column.data_type == ColumnType.TIME:
                 return self.faker.time()
-            else:
+            elif column.data_type in [ColumnType.VARCHAR, ColumnType.TEXT]:
                 # For VARCHAR/TEXT columns with datetime names, generate datetime string
                 return self.faker.date_time_between(start_date='-30y', end_date='now').strftime('%Y-%m-%d %H:%M:%S')
+            # For other data types (like INTEGER), don't override with datetime logic - fall through to type-based generation
         
         # Email columns
         if any(pattern in column_name for pattern in ['email', 'mail']):
@@ -1306,7 +1364,8 @@ class DataGenerator:
                     return self._truncate_phone_number(phone, column.max_length)
                 return phone
             else:
-                return self.faker.phone_number()
+                # Generate simple numeric phone numbers to avoid length issues  
+                return ''.join([str(random.randint(0, 9)) for _ in range(10)])
         
         # URL columns
         if any(pattern in column_name for pattern in ['url', 'website', 'link']):
@@ -1418,7 +1477,7 @@ class DataGenerator:
         return set()
     
     def _generate_foreign_key_value(self, table: TableInfo, column: ColumnInfo) -> Any:
-        """Generate a valid foreign key value."""
+        """Generate a valid foreign key value by fetching actual values from referenced table."""
         # Find the foreign key constraint for this column
         fk_constraint = None
         for fk in table.foreign_keys:
@@ -1432,28 +1491,153 @@ class DataGenerator:
         referenced_table = fk_constraint.referenced_table
         referenced_column = fk_constraint.referenced_columns[0] if fk_constraint.referenced_columns else 'id'
         
-        # Try to get existing values from cache or generate new ones
-        if self.config.preserve_existing_data and random.random() < self.config.reuse_existing_values:
-            # Try to reuse existing values
-            existing_values = self._get_existing_values(referenced_table, referenced_column)
-            if existing_values:
-                return random.choice(list(existing_values))
+        # ALWAYS fetch existing values from the referenced table (not dependent on config)
+        try:
+            if self.db_connection:
+                # Check if this FK column has unique constraint
+                is_unique_fk = self._is_unique_column(table, column.name)
+                
+                if is_unique_fk:
+                    # For unique FK columns, find unused FK values to avoid duplicates
+                    logger.debug(f"FK {column.name} has unique constraint - finding unused FK values")
+                    
+                    # Get all available FK values
+                    available_query = f"SELECT DISTINCT {referenced_column} FROM {referenced_table} WHERE {referenced_column} IS NOT NULL LIMIT 1000"
+                    available_result = self.db_connection.execute_query(available_query)
+                    available_values = [row[0] for row in available_result] if available_result else []
+                    
+                    # Get already used FK values in this table
+                    used_query = f"SELECT DISTINCT {column.name} FROM {table.name} WHERE {column.name} IS NOT NULL"
+                    used_result = self.db_connection.execute_query(used_query)
+                    used_values = [row[0] for row in used_result] if used_result else []
+                    
+                    # Find unused values
+                    unused_values = [val for val in available_values if val not in used_values]
+                    
+                    if unused_values:
+                        selected_value = random.choice(unused_values)
+                        logger.debug(f"Unique FK {column.name}: Selected unused value {selected_value} from {len(unused_values)} available unused values")
+                        return selected_value
+                    else:
+                        logger.warning(f"Unique FK {column.name}: No unused FK values available! Attempting to create new referenced record")
+                        # Try to create a new record in the referenced table
+                        new_fk_value = self._create_referenced_record(referenced_table, referenced_column)
+                        if new_fk_value is not None:
+                            logger.info(f"Unique FK {column.name}: Created new referenced record with value {new_fk_value}")
+                            return new_fk_value
+                        else:
+                            logger.error(f"Unique FK {column.name}: Failed to create referenced record, using fallback range")
+                            # Last resort: use a value from a higher range hoping it won't conflict
+                            max_available = max(available_values) if available_values else 0
+                            fallback_value = max_available + random.randint(1000, 9999)
+                            return fallback_value
+                
+                else:
+                    # For non-unique FK columns, use any available value
+                    query = f"SELECT DISTINCT {referenced_column} FROM {referenced_table} WHERE {referenced_column} IS NOT NULL LIMIT 1000"
+                    result = self.db_connection.execute_query(query)
+                    if result:
+                        existing_values = [row[0] for row in result]
+                        if existing_values:
+                            selected_value = random.choice(existing_values)
+                            logger.debug(f"FK {column.name}: Selected {selected_value} from {len(existing_values)} available {referenced_table}.{referenced_column} values")
+                            return selected_value
+        except Exception as e:
+            logger.warning(f"Failed to fetch FK values from {referenced_table}.{referenced_column}: {e}")
         
-        # Try to get from generated values cache
+        # Try to get from generated values cache as backup
         if referenced_table in self._generated_values:
             table_cache = self._generated_values[referenced_table]
             if referenced_column in table_cache and table_cache[referenced_column]:
+                logger.debug(f"FK {column.name}: Using cached generated value")
                 return random.choice(table_cache[referenced_column])
         
-        # Generate a new value based on the referenced column type
-        ref_table = self.schema.get_table(referenced_table)
-        if ref_table:
-            ref_column = ref_table.get_column(referenced_column)
-            if ref_column:
-                return self._generate_by_type(ref_column, None)
-        
-        # Fallback to integer
-        return random.randint(1, 1000)
+        # Last resort: generate a basic value in a reasonable range
+        logger.warning(f"FK {column.name}: No existing values found, using fallback range 1-10")
+        return random.randint(1, 10)
+    
+    def _create_referenced_record(self, referenced_table: str, referenced_column: str) -> Any:
+        """Create a new record in the referenced table to provide a new FK value."""
+        try:
+            if not self.db_connection:
+                return None
+            
+            # Get the referenced table schema - analyze on-demand if not in schema
+            referenced_table_info = None
+            for table in self.schema.tables:
+                if table.name == referenced_table:
+                    referenced_table_info = table
+                    break
+            
+            if not referenced_table_info:
+                logger.info(f"Referenced table {referenced_table} not in current schema, analyzing on-demand")
+                # Analyze the referenced table on-demand
+                try:
+                    from .analyzer import SchemaAnalyzer
+                    analyzer = SchemaAnalyzer(self.db_connection)
+                    referenced_schema = analyzer.analyze_schema(
+                        include_tables=[referenced_table], 
+                        analyze_data_patterns=False
+                    )
+                    if referenced_schema.tables:
+                        referenced_table_info = referenced_schema.tables[0]
+                        logger.info(f"Successfully analyzed referenced table {referenced_table}")
+                    else:
+                        logger.warning(f"Failed to analyze referenced table {referenced_table}")
+                        return None
+                except Exception as e:
+                    logger.error(f"Error analyzing referenced table {referenced_table}: {e}")
+                    return None
+            
+            # Create a minimal record with only required fields
+            record_data = {}
+            
+            for column in referenced_table_info.columns:
+                # Skip auto-increment columns - let database handle them
+                if hasattr(column, 'is_auto_increment') and column.is_auto_increment:
+                    continue
+                
+                # Generate minimal values for required columns only
+                if not column.is_nullable:
+                    record_data[column.name] = self._generate_fallback_value_for_not_null_column(column)
+            
+            if not record_data:
+                logger.warning(f"No required columns found for {referenced_table}")
+                return None
+            
+            # Insert the record
+            quoted_table = self.db_connection.quote_identifier(referenced_table)
+            columns = ', '.join([self.db_connection.quote_identifier(col) for col in record_data.keys()])
+            placeholders = ', '.join(['%s' for _ in record_data.keys()])
+            
+            insert_query = f"INSERT INTO {quoted_table} ({columns}) VALUES ({placeholders})"
+            
+            # Execute insert and get the new ID
+            with self.db_connection.get_session() as session:
+                # Use the record_data dictionary directly with proper named parameter format
+                insert_query_named = f"INSERT INTO {quoted_table} ({columns}) VALUES ({', '.join([f':{col}' for col in record_data.keys()])})"
+                result = session.execute(text(insert_query_named), record_data)
+                session.commit()
+                
+                # Get the newly inserted ID
+                if hasattr(result, 'lastrowid') and result.lastrowid:
+                    new_id = result.lastrowid
+                    logger.info(f"Created new {referenced_table} record with {referenced_column}={new_id}")
+                    return new_id
+                else:
+                    # Query to get the new ID if lastrowid is not available
+                    max_id_query = f"SELECT MAX({referenced_column}) FROM {quoted_table}"
+                    max_result = self.db_connection.execute_query(max_id_query)
+                    if max_result and max_result[0][0] is not None:
+                        new_id = max_result[0][0]
+                        logger.info(f"Retrieved new {referenced_table} record {referenced_column}={new_id}")
+                        return new_id
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to create referenced record in {referenced_table}: {e}")
+            return None
     
     def _cache_generated_values(self, table_name: str, row: Dict[str, Any]) -> None:
         """Cache generated values for foreign key references."""
