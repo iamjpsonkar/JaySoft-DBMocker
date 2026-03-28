@@ -115,6 +115,10 @@ class DuplicateConfiguration:
     respect_constraints: bool = True  # Always respect database constraints
     fast_insertion_mode: bool = True  # Use fastest possible insertion
     progress_update_interval: int = 1000  # Progress update every N rows
+    
+    # Performance optimizations (NEW)
+    enable_fk_caching: bool = True  # Enable FK value caching for performance
+    fk_cache_size: int = 1000  # Size of FK value cache pool
 
 
 @dataclass

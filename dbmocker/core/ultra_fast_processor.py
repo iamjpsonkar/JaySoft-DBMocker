@@ -924,7 +924,9 @@ class UltraFastProcessor:
                 reuse_probability=config.duplicates.data_reuse_probability,
                 constraint_respect=config.duplicates.respect_constraints,
                 fast_mode=config.duplicates.fast_insertion_mode,
-                progress_interval=config.duplicates.progress_update_interval
+                progress_interval=config.duplicates.progress_update_interval,
+                fk_cache_size=config.duplicates.fk_cache_size,
+                enable_fk_caching=config.duplicates.enable_fk_caching
             )
             
             self.fast_data_reuser = FastDataReuser(db_connection, schema, data_reuse_config)

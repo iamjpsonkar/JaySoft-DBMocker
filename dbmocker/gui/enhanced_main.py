@@ -369,6 +369,28 @@ class DuplicateConfigPanel:
         fast_check.pack(anchor=tk.W, pady=2)
         ModernToolTip(fast_check, "Use fastest possible insertion optimizations")
         
+        # FK caching settings
+        fk_cache_frame = ttk.LabelFrame(reuse_frame, text="FK Performance Settings", padding=5)
+        fk_cache_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        # Enable FK caching
+        self.enable_fk_caching = tk.BooleanVar(value=True)
+        fk_cache_check = ttk.Checkbutton(fk_cache_frame, text="Enable FK Value Caching",
+                                        variable=self.enable_fk_caching)
+        fk_cache_check.pack(anchor=tk.W, pady=2)
+        ModernToolTip(fk_cache_check, "Cache foreign key values to eliminate per-row database queries")
+        
+        # FK cache size
+        fk_cache_size_frame = ttk.Frame(fk_cache_frame)
+        fk_cache_size_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Label(fk_cache_size_frame, text="FK Cache Size:").pack(side=tk.LEFT)
+        self.fk_cache_size = tk.IntVar(value=1000)
+        fk_cache_spinbox = ttk.Spinbox(fk_cache_size_frame, from_=100, to=10000, width=8,
+                                      textvariable=self.fk_cache_size)
+        fk_cache_spinbox.pack(side=tk.LEFT, padx=(10, 0))
+        ModernToolTip(fk_cache_spinbox, "Number of FK values to cache per column (larger = faster but more memory)")
+        
         # Initially disable duplicate options
         self.toggle_duplicate_options()
     
@@ -415,7 +437,10 @@ class DuplicateConfigPanel:
             data_reuse_probability=self.data_reuse_probability.get(),
             respect_constraints=True,  # Always respect constraints
             fast_insertion_mode=self.fast_insertion_mode.get(),
-            progress_update_interval=self.progress_interval.get()
+            progress_update_interval=self.progress_interval.get(),
+            # Performance optimizations
+            enable_fk_caching=self.enable_fk_caching.get(),
+            fk_cache_size=self.fk_cache_size.get()
         )
 
 

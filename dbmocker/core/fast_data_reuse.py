@@ -7,17 +7,16 @@ while respecting database constraints.
 import logging
 import time
 import random
-import threading
-from typing import List, Dict, Any, Optional, Set, Tuple
+import uuid
+from typing import List, Dict, Any, Optional, Set, Callable
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-from sqlalchemy import text, MetaData, Table, inspect
+from sqlalchemy import text, inspect
 from tqdm import tqdm
 
 from .database import DatabaseConnection
 from .models import DatabaseSchema, TableInfo, ColumnInfo, ConstraintType, ColumnType
-from .enhanced_models import EnhancedGenerationConfig, PerformanceSettings
 
 
 logger = logging.getLogger(__name__)
@@ -32,6 +31,8 @@ class DataReuse:
     constraint_respect: bool = True  # Respect database constraints
     fast_mode: bool = True  # Use fastest possible insertion
     progress_interval: int = 1000  # Progress update interval
+    fk_cache_size: int = 1000  # Size of FK value cache pool (OPTIMIZATION)
+    enable_fk_caching: bool = True  # Enable FK value caching for performance
 
 
 @dataclass
@@ -98,32 +99,26 @@ class ConstraintAnalyzer:
         logger.debug(f"Constraint analysis for {table_name}: {constraints}")
         return constraints
     
-    def _is_foreign_key_column(self, table: TableInfo, column_name: str) -> bool:
-        """Check if a column is a foreign key."""
-        # Check if the column has foreign key constraints
-        for constraint in table.constraints:
-            if constraint.constraint_type == ConstraintType.FOREIGN_KEY:
-                if column_name in constraint.columns:
-                    return True
-        
-        # Heuristic: column names ending with '_id' are likely foreign keys
-        if column_name.lower().endswith('_id') and column_name.lower() != 'id':
-            return True
-            
-        return False
-    
     def _is_unique_column(self, table: TableInfo, column_name: str) -> bool:
         """Check if column has unique constraint."""
         for constraint in table.constraints:
             if constraint.type == ConstraintType.UNIQUE and column_name in constraint.columns:
                 return True
         return False
-    
+
     def _is_foreign_key_column(self, table: TableInfo, column_name: str) -> bool:
-        """Check if column is foreign key."""
+        """Check if column is a foreign key (schema metadata + heuristic fallback)."""
+        # Primary: use explicit FK constraints from schema
         for fk in table.foreign_keys:
             if column_name in fk.columns:
                 return True
+        # Also check constraints list for FK entries
+        for constraint in table.constraints:
+            if constraint.type == ConstraintType.FOREIGN_KEY and column_name in constraint.columns:
+                return True
+        # Heuristic fallback: columns ending with '_id' (but not named exactly 'id')
+        if column_name.lower().endswith('_id') and column_name.lower() != 'id':
+            return True
         return False
     
     def _is_constraint_free_column(self, table: TableInfo, column: ColumnInfo) -> bool:
@@ -385,50 +380,109 @@ class FastDataReuser:
         
         return constraint_safe_data
     
-    def _get_valid_foreign_key_value(self, column_info: ColumnInfo, table_name: str) -> Any:
-        """Get a valid foreign key value from the referenced table."""
+    def _resolve_fk_reference(self, column_info: ColumnInfo, table_name: str) -> Optional[tuple]:
+        """Resolve the referenced table and column for a FK column.
+
+        Returns (referenced_table, referenced_column) or None if cannot resolve.
+        Uses schema metadata first, then falls back to naming heuristics.
+        """
+        table = self.schema.get_table(table_name)
+        if table:
+            # Primary: use explicit FK constraint metadata from schema
+            for fk in table.foreign_keys:
+                if column_info.name in fk.columns and fk.referenced_table and fk.referenced_columns:
+                    idx = fk.columns.index(column_info.name)
+                    ref_col = fk.referenced_columns[idx] if idx < len(fk.referenced_columns) else fk.referenced_columns[0]
+                    return (fk.referenced_table, ref_col)
+            # Also check constraints list
+            for constraint in table.constraints:
+                if (constraint.type == ConstraintType.FOREIGN_KEY
+                        and column_info.name in constraint.columns
+                        and constraint.referenced_table
+                        and constraint.referenced_columns):
+                    idx = constraint.columns.index(column_info.name)
+                    ref_col = constraint.referenced_columns[idx] if idx < len(constraint.referenced_columns) else constraint.referenced_columns[0]
+                    return (constraint.referenced_table, ref_col)
+
+        # Heuristic fallback: derive from column name
+        col_lower = column_info.name.lower()
+        if col_lower.endswith('_id') and col_lower != 'id':
+            referenced_table = col_lower[:-3]  # strip '_id'
+            return (referenced_table, 'id')
+
+        return None
+
+    def _random_order_clause(self) -> str:
+        """Return the appropriate random-ordering SQL clause for the current driver."""
+        driver = self.db_connection.config.driver
+        if driver == "mysql":
+            return "RAND()"
+        return "RANDOM()"  # SQLite and PostgreSQL both use RANDOM()
+
+    def _get_fk_value_pool(self, column_info: ColumnInfo, table_name: str, pool_size: int = 1000) -> List[Any]:
+        """Get a pool of valid FK values from the referenced table."""
         try:
-            # Simple heuristic to find referenced table and column
-            column_name = column_info.name.lower()
-            
-            # Common FK patterns
-            if column_name == 'merchant_id':
-                referenced_table = 'merchant'
-                referenced_column = 'id'
-            elif column_name.endswith('_id'):
-                # Try to derive table name from column name
-                referenced_table = column_name[:-3]  # Remove '_id'
-                referenced_column = 'id'
-            else:
-                logger.debug(f"Cannot derive referenced table for column {column_name}")
-                return None
-            
-            # Get existing values from the referenced table
+            ref = self._resolve_fk_reference(column_info, table_name)
+            if ref is None:
+                logger.debug(f"Cannot resolve FK reference for column {column_info.name}")
+                return []
+
+            referenced_table, referenced_column = ref
             quoted_table = self.db_connection.quote_identifier(referenced_table)
             quoted_column = self.db_connection.quote_identifier(referenced_column)
-            query = f"SELECT {quoted_column} FROM {quoted_table} ORDER BY RAND() LIMIT 1"
-            
-            logger.debug(f"Getting FK value for {column_name} from {referenced_table}: {query}")
+            rand_fn = self._random_order_clause()
+
+            query = (
+                f"SELECT DISTINCT {quoted_column} FROM {quoted_table} "
+                f"WHERE {quoted_column} IS NOT NULL "
+                f"ORDER BY {rand_fn} LIMIT {pool_size}"
+            )
+
+            logger.debug(f"Getting FK pool for {column_info.name} from {referenced_table}.{referenced_column}")
             result = self.db_connection.execute_query(query)
-            
-            if result and result[0]:
-                fk_value = result[0][0]
-                logger.debug(f"Found valid FK value for {column_name}: {fk_value}")
-                return fk_value
+
+            if result:
+                fk_values = [row[0] for row in result if row[0] is not None]
+                logger.debug(f"Cached {len(fk_values)} FK values for {column_info.name}")
+                return fk_values
             else:
-                logger.warning(f"No valid FK values found in {referenced_table}.{referenced_column}")
+                logger.warning(f"No FK values found in {referenced_table}.{referenced_column}")
+                return []
+
+        except Exception as e:
+            logger.warning(f"Could not get FK value pool for {column_info.name}: {e}")
+            return []
+
+    def _get_valid_foreign_key_value(self, column_info: ColumnInfo, table_name: str) -> Any:
+        """Get a single valid FK value from the referenced table (fallback for cache misses)."""
+        try:
+            ref = self._resolve_fk_reference(column_info, table_name)
+            if ref is None:
+                logger.debug(f"Cannot resolve FK reference for column {column_info.name}")
                 return None
-                
+
+            referenced_table, referenced_column = ref
+            quoted_table = self.db_connection.quote_identifier(referenced_table)
+            quoted_column = self.db_connection.quote_identifier(referenced_column)
+            rand_fn = self._random_order_clause()
+
+            query = f"SELECT {quoted_column} FROM {quoted_table} ORDER BY {rand_fn} LIMIT 1"
+
+            logger.debug(f"Getting FK value for {column_info.name} from {referenced_table}.{referenced_column}")
+            result = self.db_connection.execute_query(query)
+
+            if result and result[0]:
+                return result[0][0]
+            else:
+                logger.warning(f"No FK values found in {referenced_table}.{referenced_column}")
+                return None
+
         except Exception as e:
             logger.warning(f"Could not get valid FK value for {column_info.name}: {e}")
             return None
     
     def _generate_unique_value_for_column(self, column_info: ColumnInfo, table_name: str) -> Any:
         """Generate a unique value for a column to avoid constraint violations."""
-        import uuid
-        import random
-        import time
-        
         # Create a unique key for this column to track its counter
         counter_key = f"{table_name}.{column_info.name}"
         
@@ -475,9 +529,8 @@ class FastDataReuser:
     
     def _generate_fallback_for_null_column(self, column: ColumnInfo) -> Any:
         """Generate a fallback value for NULL values in NOT NULL columns."""
-        import random
         from datetime import datetime, date
-        
+
         if column.data_type in [ColumnType.INTEGER, ColumnType.BIGINT, ColumnType.SMALLINT]:
             return 1
         elif column.data_type in [ColumnType.FLOAT, ColumnType.DOUBLE]:
@@ -502,12 +555,10 @@ class FastDataReuser:
             return f"reuse_fallback_{random.randint(1, 1000)}"
     
     def fast_insert_millions(self, table_name: str, target_rows: int,
-                           progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+                           progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """Insert millions of records ultra-fast using data reuse."""
         logger.info(f"🚀 Starting ultra-fast insertion: {target_rows:,} rows into {table_name}")
-        
-        start_time = time.time()
-        
+
         # Prepare table if not already prepared
         if table_name not in self.data_pools:
             if not self.prepare_table_for_fast_insertion(table_name):
@@ -525,7 +576,7 @@ class FastDataReuser:
             return self._fast_batch_insert(table_name, target_rows, progress_callback)
     
     def _ultra_fast_bulk_insert(self, table_name: str, target_rows: int,
-                              progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+                              progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """Ultra-fast bulk insertion using multiple strategies."""
         logger.info(f"⚡ Using ultra-fast bulk insertion for {target_rows:,} rows")
         
@@ -584,7 +635,7 @@ class FastDataReuser:
         return result
     
     def _fast_batch_insert(self, table_name: str, target_rows: int,
-                         progress_callback: Optional[callable] = None) -> Dict[str, Any]:
+                         progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """Fast batch insertion for smaller datasets."""
         logger.info(f"📦 Using fast batch insertion for {target_rows:,} rows")
         
@@ -628,12 +679,16 @@ class FastDataReuser:
         if not data_pool.constraint_safe_data:
             return []
         
+        logger.info(f"🚀 Pre-generating {target_rows:,} rows for {data_pool.table_name}...")
+        start_time = time.time()
+        
         all_data = []
         pool_size = len(data_pool.constraint_safe_data)
         
         # Get constraints for this table to handle unique columns
         constraints = self.constraint_analyzer.analyze_table_constraints(data_pool.table_name)
         unique_columns = set(constraints.get('unique_columns', []))
+        fk_columns = set(constraints.get('foreign_keys', []))
         
         # Get table info for column details
         table_info = None
@@ -642,29 +697,73 @@ class FastDataReuser:
                 table_info = table
                 break
         
+        # OPTIMIZATION 1: Pre-cache FK values to avoid per-row database queries
+        fk_value_cache = {}
+        if table_info and fk_columns and self.config.enable_fk_caching:
+            logger.info(f"🔄 Pre-caching FK values for {len(fk_columns)} foreign key columns...")
+            cache_start = time.time()
+            
+            for column_info in table_info.columns:
+                column_name = column_info.name
+                if column_name in fk_columns:
+                    # Get a pool of valid FK values for this column (instead of querying for each row)
+                    cache_size = min(target_rows, self.config.fk_cache_size)
+                    fk_value_pool = self._get_fk_value_pool(column_info, data_pool.table_name, cache_size)
+                    if fk_value_pool:
+                        fk_value_cache[column_name] = fk_value_pool
+                        logger.debug(f"  Cached {len(fk_value_pool)} values for FK column {column_name}")
+            
+            cache_time = time.time() - cache_start
+            logger.info(f"✅ FK caching completed in {cache_time:.2f}s")
+        
         # Use numpy for ultra-fast random selection
         indices = np.random.randint(0, pool_size, size=target_rows)
         
-        for i in indices:
-            row_data = data_pool.constraint_safe_data[i].copy()
+        # OPTIMIZATION 2: Process in batches with progress tracking
+        batch_size = 10000
+        progress_logged = 0
+        
+        for batch_start in range(0, target_rows, batch_size):
+            batch_end = min(batch_start + batch_size, target_rows)
             
-            # For unique columns, generate fresh unique values for each row
-            # For foreign key columns, get valid existing FK values
-            if table_info:
-                for column_info in table_info.columns:
-                    column_name = column_info.name
-                    # Priority: FK columns first (even if they're unique), then regular unique columns
-                    if column_name in constraints.get('foreign_keys', []):
-                        # For FK columns, get a valid existing FK value (this handles unique FK constraints properly)
-                        valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
-                        if valid_fk_value is not None:
-                            row_data[column_name] = valid_fk_value
-                    elif column_name in unique_columns:
-                        # Generate a fresh unique value for non-FK unique columns
-                        unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
-                        row_data[column_name] = unique_value
+            for i in range(batch_start, batch_end):
+                row_data = data_pool.constraint_safe_data[indices[i]].copy()
+                
+                # For unique columns, generate fresh unique values for each row
+                # For foreign key columns, use cached FK values
+                if table_info:
+                    for column_info in table_info.columns:
+                        column_name = column_info.name
+                        # Priority: FK columns first (even if they're unique), then regular unique columns
+                        if column_name in fk_columns:
+                            # OPTIMIZATION: Use cached FK values instead of database queries
+                            if column_name in fk_value_cache:
+                                # Randomly select from cached FK values
+                                cached_values = fk_value_cache[column_name]
+                                row_data[column_name] = random.choice(cached_values)
+                            else:
+                                # Fallback: single query (but this should be rare now)
+                                valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
+                                if valid_fk_value is not None:
+                                    row_data[column_name] = valid_fk_value
+                        elif column_name in unique_columns:
+                            # Generate a fresh unique value for non-FK unique columns
+                            unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
+                            row_data[column_name] = unique_value
+                
+                all_data.append(row_data)
             
-            all_data.append(row_data)
+            # Progress logging every batch
+            if batch_end - progress_logged >= batch_size:
+                elapsed = time.time() - start_time
+                rate = batch_end / elapsed if elapsed > 0 else 0
+                progress = (batch_end / target_rows) * 100
+                logger.info(f"  📊 Pre-generation progress: {batch_end:,}/{target_rows:,} ({progress:.1f}%) | {rate:,.0f} rows/s")
+                progress_logged = batch_end
+        
+        total_time = time.time() - start_time
+        avg_rate = target_rows / total_time if total_time > 0 else 0
+        logger.info(f"✅ Pre-generation completed: {len(all_data):,} rows in {total_time:.2f}s ({avg_rate:,.0f} rows/s)")
         
         return all_data
     
@@ -674,11 +773,11 @@ class FastDataReuser:
             return []
         
         batch_data = []
-        pool_size = len(data_pool.constraint_safe_data)
-        
+
         # Get constraints for this table
         constraints = self.constraint_analyzer.analyze_table_constraints(data_pool.table_name)
         unique_columns = set(constraints.get('unique_columns', []))
+        fk_columns = set(constraints.get('foreign_keys', []))
         
         # Get table info for column details
         table_info = None
@@ -687,26 +786,43 @@ class FastDataReuser:
                 table_info = table
                 break
         
+        # OPTIMIZATION: Cache FK values for the batch to avoid repeated queries
+        fk_value_cache = {}
+        if table_info and fk_columns:
+            for column_info in table_info.columns:
+                column_name = column_info.name
+                if column_name in fk_columns:
+                    # Get a small pool of FK values for this batch
+                    fk_value_pool = self._get_fk_value_pool(column_info, data_pool.table_name, min(batch_size, 100))
+                    if fk_value_pool:
+                        fk_value_cache[column_name] = fk_value_pool
+        
         for _ in range(batch_size):
             # Randomly select a row from constraint-safe data as template
             source_row = random.choice(data_pool.constraint_safe_data)
             new_row = source_row.copy()
             
             # For unique columns, generate fresh unique values for each row
-            # For foreign key columns, get valid existing FK values  
+            # For foreign key columns, use cached FK values  
             if table_info:
                 for column_info in table_info.columns:
                     column_name = column_info.name
                     # Priority: FK columns first (even if they're unique), then regular unique columns
-                    if column_name in constraints.get('foreign_keys', []):
-                        # For FK columns, get a valid existing FK value (this handles unique FK constraints properly)
-                        logger.debug(f"Processing FK column {column_name}, getting valid FK value...")
-                        valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
-                        if valid_fk_value is not None:
-                            new_row[column_name] = valid_fk_value
-                            logger.debug(f"Replaced FK value for {column_name}: {valid_fk_value}")
+                    if column_name in fk_columns:
+                        # OPTIMIZATION: Use cached FK values instead of database queries
+                        if column_name in fk_value_cache:
+                            # Randomly select from cached FK values
+                            cached_values = fk_value_cache[column_name]
+                            new_row[column_name] = random.choice(cached_values)
                         else:
-                            logger.warning(f"Could not get valid FK value for {column_name}, keeping original")
+                            # Fallback: single query (but this should be rare now)
+                            logger.debug(f"Processing FK column {column_name}, getting valid FK value...")
+                            valid_fk_value = self._get_valid_foreign_key_value(column_info, data_pool.table_name)
+                            if valid_fk_value is not None:
+                                new_row[column_name] = valid_fk_value
+                                logger.debug(f"Replaced FK value for {column_name}: {valid_fk_value}")
+                            else:
+                                logger.warning(f"Could not get valid FK value for {column_name}, keeping original")
                     elif column_name in unique_columns:
                         # Generate a fresh unique value for non-FK unique columns
                         unique_value = self._generate_unique_value_for_column(column_info, data_pool.table_name)
@@ -832,14 +948,17 @@ class FastDataReuser:
 
 
 def create_fast_data_reuser(db_connection: DatabaseConnection, schema: DatabaseSchema,
-                          sample_size: int = 10000, fast_mode: bool = True) -> FastDataReuser:
+                          sample_size: int = 10000, fast_mode: bool = True, 
+                          enable_fk_caching: bool = True, fk_cache_size: int = 1000) -> FastDataReuser:
     """Factory function to create a FastDataReuser."""
     config = DataReuse(
         enable_data_reuse=True,
         sample_size=sample_size,
         reuse_probability=0.95,
         fast_mode=fast_mode,
-        progress_interval=1000
+        progress_interval=1000,
+        fk_cache_size=fk_cache_size,
+        enable_fk_caching=enable_fk_caching
     )
     
     return FastDataReuser(db_connection, schema, config)
